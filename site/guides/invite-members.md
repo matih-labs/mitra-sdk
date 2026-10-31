@@ -4,7 +4,7 @@ Add people to a workspace by email or phone number, see who is in it, change rol
 
 !!! info "You need"
     - Product: **Users & members**. Listing needs `members:read`; inviting, changing roles and removing need `members:manage` with **Allow changes** on for that product.
-    - The credential must act as a workspace **admin** or owner. Scopes only narrow what a key can do: a `members:manage` key made by a non-admin still cannot invite.
+    - To invite, change roles, remove people or list invitations, the credential must act as a workspace **admin** or owner. Scopes only narrow what a key can do: a `members:manage` key made by a non-admin still cannot invite. Listing members needs only `members:read` and any role.
     - An API key is pinned to its workspace. With OAuth, choose the workspace first ([Switch workspaces](switch-workspaces.md)).
 
 !!! warning "Invitations message a third party"
@@ -26,8 +26,8 @@ Add people to a workspace by email or phone number, see who is in it, change rol
 
     client = Mitra()
 
-    for m in client.members.list()["members"]:
-        print(m["id"], m.get("email"), m.get("role"))
+    for m in client.members.list().members:
+        print(m.id, m.email, m.role)
     ```
 
 === "Python async"
@@ -40,8 +40,8 @@ Add people to a workspace by email or phone number, see who is in it, change rol
     async def main():
         async with AsyncMitra() as client:
             members = await client.members.list()
-            for m in members["members"]:
-                print(m["id"], m.get("email"), m.get("role"))
+            for m in members.members:
+                print(m.id, m.email, m.role)
 
 
     asyncio.run(main())
@@ -68,7 +68,9 @@ Add people to a workspace by email or phone number, see who is in it, change rol
     console.log(members);
     ```
 
-The role values your workspace accepts come from this list (typically `owner`, `admin`, `member`). Read them from `GET /members` rather than hard-coding more.
+Each member has `id` (a `usr_...` user id, the `{member_id}` of the routes below), `name`, `email`, `phone` (masked unless you are an admin), `role`, `whatsapp_only`, `joined_at`, `last_seen_at`, `monthly_cap_credits`, `you`, and `can_change_role` and `can_remove`, which say what the caller may do to that row.
+
+Roles are `owner`, `admin`, `user` and `viewer`. You can give `admin`, `user` or `viewer`; `owner` is never givable. The owner is made and changed in the app, not here.
 
 ## Invite by email
 
@@ -78,20 +80,20 @@ The role values your workspace accepts come from this list (typically `owner`, `
     curl -s https://workspace.matih.ai/api/v1/invitations \
       -H "Authorization: Bearer $MATIH_API_KEY" \
       -H "Content-Type: application/json" \
-      -d '{"email": "teammate@example.com", "role": "member"}'
+      -d '{"email": "teammate@example.com", "role": "user"}'
     ```
 
 === "Python"
 
     ```python
-    invitation = client.invitations.create("member", email="teammate@example.com")
+    invitation = client.invitations.create("user", email="teammate@example.com")
     print(invitation)
     ```
 
 === "Python async"
 
     ```python
-    invitation = await client.invitations.create("member", email="teammate@example.com")
+    invitation = await client.invitations.create("user", email="teammate@example.com")
     ```
 
 === "TypeScript"
@@ -99,7 +101,7 @@ The role values your workspace accepts come from this list (typically `owner`, `
     ```ts
     const invitation = await mitra.invitations.create({
       email: "teammate@example.com",
-      role: "member",
+      role: "user",
     });
     console.log(invitation.id);
     ```
@@ -113,7 +115,7 @@ The role values your workspace accepts come from this list (typically `owner`, `
         Authorization: `Bearer ${process.env.MATIH_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ email: "teammate@example.com", role: "member" }),
+      body: JSON.stringify({ email: "teammate@example.com", role: "user" }),
     });
     console.log(res.status, await res.json());
     ```
@@ -128,7 +130,7 @@ The role values your workspace accepts come from this list (typically `owner`, `
 
     public class Invite {
         public static void main(String[] args) throws Exception {
-            String body = "{\"email\": \"teammate@example.com\", \"role\": \"member\"}";
+            String body = "{\"email\": \"teammate@example.com\", \"role\": \"user\"}";
             HttpRequest req = HttpRequest.newBuilder(URI.create("https://workspace.matih.ai/api/v1/invitations"))
                 .header("Authorization", "Bearer " + System.getenv("MATIH_API_KEY"))
                 .header("Content-Type", "application/json")
@@ -155,7 +157,7 @@ The role values your workspace accepts come from this list (typically `owner`, `
     )
 
     func main() {
-    	body := `{"email": "teammate@example.com", "role": "member"}`
+    	body := `{"email": "teammate@example.com", "role": "user"}`
     	req, _ := http.NewRequest("POST", "https://workspace.matih.ai/api/v1/invitations", strings.NewReader(body))
     	req.Header.Set("Authorization", "Bearer "+os.Getenv("MATIH_API_KEY"))
     	req.Header.Set("Content-Type", "application/json")
@@ -183,7 +185,7 @@ The role values your workspace accepts come from this list (typically `owner`, `
 
     var res = await http.PostAsync(
         "https://workspace.matih.ai/api/v1/invitations",
-        new StringContent("{\"email\": \"teammate@example.com\", \"role\": \"member\"}",
+        new StringContent("{\"email\": \"teammate@example.com\", \"role\": \"user\"}",
             Encoding.UTF8, "application/json"));
     Console.WriteLine($"{(int)res.StatusCode} {await res.Content.ReadAsStringAsync()}");
     ```
@@ -200,7 +202,7 @@ The role values your workspace accepts come from this list (typically `owner`, `
             "Authorization: Bearer " . getenv("MATIH_API_KEY"),
             "Content-Type: application/json",
         ],
-        CURLOPT_POSTFIELDS => json_encode(["email" => "teammate@example.com", "role" => "member"]),
+        CURLOPT_POSTFIELDS => json_encode(["email" => "teammate@example.com", "role" => "user"]),
     ]);
     echo curl_exec($ch);
     ```
@@ -216,14 +218,14 @@ The role values your workspace accepts come from this list (typically `owner`, `
       "Authorization" => "Bearer #{ENV['MATIH_API_KEY']}",
       "Content-Type" => "application/json"
     })
-    req.body = { email: "teammate@example.com", role: "member" }.to_json
+    req.body = { email: "teammate@example.com", role: "user" }.to_json
     res = Net::HTTP.start(uri.host, uri.port, use_ssl: true) { |h| h.request(req) }
     puts "#{res.code} #{res.body}"
     ```
 
 ## Invite by phone
 
-Pass `phone` in international format instead of `email`. Send exactly one of the two.
+Pass `phone` in international format instead of `email`. Send exactly one of the two. A phone invitation goes out on WhatsApp. If it cannot be delivered, the response carries `join_code`, `join_message` and `join_url` **once**: pass them on by hand, because they are never shown again. `whatsapp_only: true` lets the person use the workspace on WhatsApp only (not with `admin`).
 
 === "curl"
 
@@ -231,19 +233,22 @@ Pass `phone` in international format instead of `email`. Send exactly one of the
     curl -s https://workspace.matih.ai/api/v1/invitations \
       -H "Authorization: Bearer $MATIH_API_KEY" \
       -H "Content-Type: application/json" \
-      -d '{"phone": "+919800000000", "role": "member"}'
+      -d '{"phone": "+919800000000", "role": "user"}'
     ```
 
 === "Python"
 
     ```python
-    client.invitations.create("member", phone="+919800000000")
+    inv = client.invitations.create("user", phone="+919800000000")
+    if inv.join_code:
+        print(inv.join_message)   # WhatsApp delivery failed: share this yourself
     ```
 
 === "TypeScript"
 
     ```ts
-    await mitra.invitations.create({ phone: "+919800000000", role: "member" });
+    const inv = await mitra.invitations.create({ phone: "+919800000000", role: "user" });
+    if (inv.join_code) console.log(inv.join_message); // WhatsApp delivery failed: share this yourself
     ```
 
 ## List and revoke pending invitations
@@ -273,6 +278,8 @@ Pass `phone` in international format instead of `email`. Send exactly one of the
     ```
 
 ## Change a role, remove a member
+
+`PATCH /members/{member_id}` takes `{"role": "admin" | "user" | "viewer"}` and returns the member. Nobody can be made owner here and the owner's role cannot be changed. `DELETE /members/{member_id}` removes someone else (you cannot remove yourself, and the owner cannot be removed); their own content stays theirs. Both are admin-only.
 
 === "curl"
 
@@ -304,10 +311,12 @@ Pass `phone` in international format instead of `email`. Send exactly one of the
 
 | Status | Category | Meaning |
 |---|---|---|
-| 402 | `member_cap` | The workspace has no seats left. An admin must raise the cap or free a seat. |
 | 403 | `scope` | The key lacks `members:read` or `members:manage`. Edit the key's products in Settings › API & MCP. |
 | 403 | `workspace_role` | The person the key acts as is not an admin or owner. |
-| 422 | validation | Both or neither of `email` and `phone`, a malformed address, or an unknown role. |
+| 400 | `workspace` | Both or neither of `email` and `phone`, a bad invitation, or removing yourself (leave from the app). |
+| 404 | `not_found` | No such member or invitation in this workspace. |
+| 409 | | Revoking an invitation that is no longer open (already accepted, declined or revoked). |
+| 422 | | The body is invalid, for example a role that is not `admin`, `user` or `viewer` (`owner` and `member` are refused). |
 
 See [Errors](../concepts/errors.md) for the full envelope.
 
