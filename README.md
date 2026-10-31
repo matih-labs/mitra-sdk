@@ -110,6 +110,7 @@ A key or token never exceeds the role of the member it acts as, whatever scopes 
 
 ## Links
 
+- **Documentation: [matih.ai/docs/api](https://matih.ai/docs/api/overview)**: quickstart, concepts, guides, MCP setup and SDK reference
 - Live spec: `https://workspace.matih.ai/api/v1/openapi.json`, docs: `https://workspace.matih.ai/api/v1/docs`
 - [MCP guide](mcp/README.md) - [Agent skill](skills/matih/SKILL.md) - [curl recipes](examples/curl/README.md)
 - [Contributing](CONTRIBUTING.md) - [Changelog](CHANGELOG.md) - [Security](SECURITY.md)

@@ -15,6 +15,8 @@ pip install mitra-sdk        # once released
 
 Python 3.10+. The package imports as `mitra`.
 
+Full documentation: [matih.ai/docs/api](https://matih.ai/docs/api/overview), with the [SDK reference](https://matih.ai/docs/api/sdk/python).
+
 ## Authenticate
 
 ```python

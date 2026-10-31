@@ -11,6 +11,8 @@ TypeScript client for the Mitra public API. Ask questions of your data in any of
 
 API base URL: `https://workspace.matih.ai/api/v1`. The OpenAPI 3.1 spec is served at `/api/v1/openapi.json`.
 
+Full documentation: [matih.ai/docs/api](https://matih.ai/docs/api/overview), with the [SDK reference](https://matih.ai/docs/api/sdk/typescript).
+
 ## Install
 
 ```sh

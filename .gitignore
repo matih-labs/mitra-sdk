@@ -20,5 +20,3 @@ htmlcov/
 .vscode/
 sdks/typescript/src/schema.d.ts
 
-# Output of the docs build (mkdocs.yml site_dir)
-_site/
