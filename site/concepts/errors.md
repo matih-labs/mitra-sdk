@@ -1,29 +1,48 @@
 # Errors
 
-Every error uses one envelope:
+Errors use one envelope:
 
 ```json
-{"detail": {"category": "scope", "message": "Missing scope: ask", "code": "optional_machine_code"}}
+{"detail": {"category": "scope", "message": "This credential is not allowed to do that: it needs ask.", "code": "optional_machine_code"}}
 ```
 
-Read `category` first, then `message`. `code` is optional and stable for programs. Failed jobs carry
-an `error` object with `category` and `message` in the same style.
+Read `category` first, then `message`. `code` is a finer, stable reason where one exists. Failed jobs
+carry an `error` object with `category` and `message` in the same style.
+
+Two things do not use this envelope: a request that fails validation is a plain `422` with `detail` as a
+**list** (see below), and the OAuth endpoints answer `{"error", "error_description"}`
+([OAuth](../guides/oauth.md#oauth-errors)).
 
 | Status | `category` | Meaning | What to do |
 |---|---|---|---|
-| 401 | none | Missing, wrong, expired or revoked credential. `WWW-Authenticate` is set. | API key: get a new key. OAuth: refresh once, then sign in again. Never loop. |
-| 402 | `credits` | The workspace pool is empty. | Stop; an admin must add credits. See [Credits](credits.md). |
-| 402 | `member_cap` | The acting member hit their monthly cap. | Tell an admin to raise it. |
-| 403 | `scope` | The credential lacks the scope. The message names it. | Enable the product (and *Allow changes*) on the key. See [Scopes](scopes.md). |
-| 403 | `workspace_role` | The member's role is too low for this action. | Do not work around it; ask an admin. |
-| 403 | `source_access` | The member cannot use that source, or it is in another workspace. | List sources again and choose another. |
-| 409 | `busy` | A request in the same conversation (or the same long task) is already running. | Wait 3 to 5 s, retry with the same `Idempotency-Key`. |
-| 413 / 415 / 422 | varies | Bad upload or input. `422` on `POST /sources` carries the connection test result. | Fix the request; do not retry unchanged. |
-| 429 | (varies) | Too many requests. `Retry-After` gives seconds. | See [Rate limits](rate-limits.md). |
-| 5xx | varies | Server error. | Retry up to three times with backoff and the same `Idempotency-Key`; then report `request_id`. |
+| 400 | `invalid` | The request is wrong in a way the schema cannot say: a bad `on_duplicate` (`ask` or `keep_both`) or `decision` (`use_existing`, `keep_both` or `cancel`), no `file` part, more than one file. | Fix the request. |
+| 400 | `workspace` | The workspace operation cannot be done, for example inviting with both or neither of `email` and `phone`, or choosing a role that is not `admin`, `user` or `viewer`. | Fix the request. |
+| 401 | `authentication` | Missing, unknown, expired or revoked credential, or a key sent to a path it is not allowed on. `WWW-Authenticate: Bearer resource_metadata="..."` is set. | API key: make a new one. OAuth: refresh once, then sign in again. Never loop. |
+| 402 | `not_ready` | The workspace has no Matih Credits left. Nothing ran and nothing was charged. | Stop; an admin must add credits. See [Credits](credits.md). |
+| 402 | `member_cap` | The member the key acts as reached the monthly cap an admin set. | Tell an admin to raise it. |
+| 403 | `scope` | The credential lacks the scope; the message names it. | Switch the Product (and *Allow changes*) on for the key. See [Scopes](scopes.md). |
+| 403 | `workspace_role` | The member's role is too low for this action, or has dropped below what the key's scopes need. | Do not work around it; ask an admin. |
+| 403 | `workspace` | An API key is pinned to one workspace and `X-Matih-Workspace` (or `PUT /me/workspace`) named another. | Make a key in the other workspace, or use OAuth. |
+| 403 | `workspace_membership` | The member the credential acts as is no longer in the workspace. | The key is dead: remove it. |
+| 403 | `source_access` | The member cannot use that source. | List sources again and choose another. |
+| 404 | `not_found` | No such resource in this workspace. Another member's or workspace's resource is the same `404`. | Check the id. |
+| 409 | varies | The target is not in a state for it: an invitation already accepted or revoked, a file not waiting for a duplicate decision, or the workspace already has 20 webhooks (`limit`). | Re-read the resource. |
+| 413 | `too_large`, `audio_too_large` | The file or recording is over the limit; refused before it is read in full. | Send a smaller one. |
+| 415 | `unsupported_audio_type` | Not a supported file type. | Send a supported type. |
+| 422 | (none) | Validation failed: `detail` is a list of `{loc, msg, type}`. | Fix the field in `loc`; do not retry unchanged. |
+| 422 | `connection` | `POST /sources`: the connection test failed. Nothing was saved; `detail.test` has the result. | Fix the connection details. |
+| 422 | `validation`, `not_heard` | A webhook URL or events list is invalid; a recording had no speech. | Fix the request. |
+| 429 | `rate_limit` | Too many requests. `Retry-After` gives seconds. | See [Rate limits](rate-limits.md). |
+| 500 | `internal` | Unexpected server error. | Retry up to three times with backoff; then report the time and the request. |
+| 503 | `unavailable`, `disabled`, `language_unavailable`, `speech_unavailable` | The public API, uploads, voice or the speech service is off or busy on this deployment. | Retry later. |
 
-An HTTP `200` Answer with `status: "error"`, `"empty"` or `"clarification"` is **not** an HTTP error. See the
-[Quickstart](../quickstart.md) for what to do with each.
+!!! note "`rate_limit`"
+    The OpenAPI document calls the 429 category `rate_limited`; the server sends `rate_limit`. Branch on the
+    status code, not the category, for `429`.
+
+An HTTP `200` Answer with `status: "error"`, `"empty"`, `"clarification"` or `"cancelled"` is **not** an
+HTTP error. See the [Quickstart](../quickstart.md) for what to do with each. A question that fails, is
+cancelled or is refused is never charged.
 
 ## Handle them in code
 
@@ -40,7 +59,7 @@ An HTTP `200` Answer with `status: "error"`, `"empty"` or `"clarification"` is *
     except RateLimitError as err:
         print("slow down, retry in", err.retry_after, "seconds")
     except CreditsError as err:
-        print("out of credits:", err.category)       # credits | member_cap
+        print("out of credits:", err.category)       # not_ready | member_cap
     except PermissionDeniedError as err:
         print("not allowed:", err.category, err)     # scope | workspace_role | source_access
     except AuthError:
@@ -86,4 +105,4 @@ The exact attribute names for each SDK are in the [Python](../sdk/python.md) and
 ## Telling a person
 
 One sentence on what happened, one on what they can do next. Never put a credential in the message. Include the
-`request_id` when you have one: it lets Matih support find the request.
+`request_id` of the Answer when you have one: it lets Matih support find the request.
