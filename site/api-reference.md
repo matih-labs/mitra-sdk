@@ -19,8 +19,13 @@ You can also open the server's own interactive docs at
 curl -s https://workspace.matih.ai/api/v1/openapi.json -o openapi.json
 ```
 
-A copy of the spec is committed to the [`openapi/`](https://github.com/matih-labs/mitra-sdk/tree/main/openapi) folder of the
-SDK repository on every release; the Python and TypeScript SDKs are generated and checked against it.
+Once the API is published, a copy of the spec is committed to the [`openapi/`](https://github.com/matih-labs/mitra-sdk/tree/main/openapi) folder of the
+SDK repository on each API release (an automated pull request), and the TypeScript types are generated from it.
+
+!!! note "v1 is rolling out"
+    `/api/v1` is being rolled out to workspace.matih.ai and is not yet live for every workspace. Until it
+    is, the live reference below may not load; the pages in [Concepts](concepts/workspaces.md) and the
+    guides describe the same contract.
 
 <div id="redoc-host">
   <p id="redoc-status">Loading the API reference from workspace.matih.ai ...</p>

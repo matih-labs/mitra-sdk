@@ -115,6 +115,12 @@ the same workspace role checks, the same credits and the same metering.
   `Prefer: wait=N` makes them answer inline when they finish in time. See [Sync and async](concepts/sync-async.md).
 - **Words are translated, numbers never are.** See [Languages](concepts/languages.md).
 - **Errors have one shape.** `{"detail": {"category", "message", "code"}}`. See [Errors](concepts/errors.md).
+- **Retries are safe on questions and forecasts.** Send an `Idempotency-Key` on `POST /ask` and `POST /predictions`
+  and a retried request returns the original instead of running (and charging) twice.
+
+!!! info "Status"
+    The versioned API and these SDKs (version 0.1.0) are rolling out to workspace.matih.ai now; they are not
+    yet live for every workspace. Create keys under **Settings › API & MCP** once you see that tab.
 
 !!! note "Source of truth"
     These docs are written from the server's contract and the SDK source. If a page and the
