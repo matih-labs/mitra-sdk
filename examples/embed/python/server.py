@@ -58,7 +58,7 @@ def make_handler(
         server_version = "matih-embed-example"
 
         def log_message(self, format: str, *args: Any) -> None:
-            sys.stderr.write("%s %s\n" % (self.command, urlsplit(self.path).path))
+            sys.stderr.write(f"{self.command} {urlsplit(self.path).path}\n")
 
         # ---------------------------------------------------------------- helpers
         def _json(self, status: int, body: dict[str, Any], extra: dict[str, str] | None = None) -> None:

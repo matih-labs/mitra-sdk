@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 from mitra import Mitra
+
 from server import make_handler
 
 APP_ORIGIN = "http://localhost:3000"
