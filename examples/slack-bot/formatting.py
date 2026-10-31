@@ -93,6 +93,8 @@ def answer_blocks(answer: Any) -> list[dict[str, Any]]:
         return blocks
     if status == "empty":
         text = answer.answer or "No rows matched. Try a wider date range or fewer filters."
+    elif status == "cancelled":
+        text = answer.answer or "That question was cancelled."
     elif status == "error":
         text = answer.answer or "I could not answer that. Try rephrasing the question."
     else:
@@ -122,9 +124,11 @@ def error_text(exc: Exception) -> str:
     if name == "PermissionDeniedError":
         return f"Matih says this key is not allowed to do that: {message}{suffix}"
     if name == "CreditsError":
-        return f"The workspace is out of credits or at its member cap: {message}{suffix}"
+        if getattr(exc, "category", None) == "member_cap":
+            return f"You have reached your monthly credit cap in this workspace: {message}{suffix}"
+        return f"The workspace is out of credits: {message}{suffix}"
     if name == "BusyError":
-        return f"Matih is busy with another request for this workspace. Try again in a moment.{suffix}"
+        return f"Matih could not do that right now (conflict): {message}{suffix}"
     if name == "RateLimitError":
         wait = getattr(exc, "retry_after", None)
         return f"Slow down a little, try again in {int(wait)}s." if wait else "Slow down a little."
@@ -132,6 +136,8 @@ def error_text(exc: Exception) -> str:
         return "The Matih credential was rejected. Ask an admin to check the bot's key."
     if name == "JobTimeoutError":
         return "That is taking longer than expected. It will keep running; ask again shortly."
+    if name == "JobFailedError":
+        return f"That did not finish: {message}{suffix}"
     return f"Something went wrong talking to Matih: {message}{suffix}"
 
 

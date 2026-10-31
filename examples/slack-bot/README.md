@@ -10,7 +10,7 @@ needs no public URL.
 | `/matih ask <question>` or `@Matih <question>` | Answer text, a table preview, follow-up suggestions, and the chart image uploaded to the thread. Replies in a thread keep the same conversation. |
 | `/matih gems` | The latest Gems with their chart images |
 | `/matih dashboard <name>` | The dashboard rendered as an image (fuzzy name match) |
-| `/matih forecast <question>` | Starts a prediction job; the "started" message is updated with the result and chart when it finishes (up to 30 minutes) |
+| `/matih forecast <question>` | Starts a prediction job; the "started" message is updated with the answer when it finishes (usually one to five minutes, at most 30) |
 | `/matih workspace` | Lists reachable workspaces, with buttons to choose one for this channel |
 
 If Matih asks a clarifying question the bot shows the options as buttons. The Slack user's locale
@@ -23,7 +23,7 @@ languages work as typed.
    a manifest). Install it, then copy the **Bot token** (`xoxb-`) and create an **App-level token**
    (`xapp-`) with the `connections:write` scope.
 2. In Matih, as a workspace admin, create an API key under **Settings › API & MCP** with the
-   scopes `workspaces:read`, `sources:read`, `gems:read`, `ask`, `dashboards:read` and `predict`.
+   scopes `workspaces:read`, `gems:read`, `ask`, `dashboards:read` and `predict`.
 3. Configure and run:
 
    ```bash
@@ -49,13 +49,19 @@ switch between several workspaces use an OAuth token (below).
 
 For a bot where each Slack user sees only their own data, use OAuth 2.1 instead of one shared key:
 
-1. Register the bot as an OAuth client with dynamic client registration. Discovery documents are at
+1. Register the bot as an OAuth client with dynamic client registration
+   (`POST /api/v1/oauth/register`). Discovery documents are at
    `https://workspace.matih.ai/.well-known/oauth-authorization-server` and
    `/.well-known/oauth-protected-resource`.
-2. When a user first runs `/matih`, reply with an authorization link (authorization code with
-   PKCE; store the `code_verifier` against their Slack user id). Your redirect URL receives the
-   code, exchanges it for an access token (`mto_...`) and a rotating refresh token (`mtr_...`).
-3. Keep one token pair per Slack user (encrypted at rest), refresh before expiry, and construct
+2. When a user first runs `/matih`, reply with an authorization link
+   (`/api/v1/oauth/authorize`, authorization code with PKCE `S256`; store the `code_verifier`
+   against their Slack user id). Ask for the scopes the bot uses in `scope`: the default is
+   read and ask only, so add `predict` for `/matih forecast`. Your redirect URL receives the
+   code and exchanges it at `/api/v1/oauth/token` for an access token (`mto_...`, valid one
+   hour) and a rotating refresh token (`mtr_...`, valid 30 days from its last use).
+3. Keep one token pair per Slack user (encrypted at rest). Each refresh returns a new refresh
+   token and retires the old one, so save the answer before using it: presenting an old refresh
+   token revokes the whole grant. Refresh before the hour is up, and construct
    `Mitra(access_token=user_token, workspace_id=...)` per request instead of the shared client.
    OAuth tokens may reach several workspaces, so `/matih workspace` then lets each channel or
    user switch.

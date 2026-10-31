@@ -68,6 +68,18 @@ def test_error_text():
     assert "ref r1" in f.error_text(MitraError("boom", request_id="r1"))
 
 
+def test_credit_errors_say_which_limit():
+    from mitra import CreditsError
+
+    assert "monthly credit cap" in f.error_text(CreditsError("x", category="member_cap"))
+    assert "out of credits" in f.error_text(CreditsError("x", category="not_ready"))
+
+
+def test_cancelled_has_default_text():
+    blocks = f.answer_blocks(make_answer(status="cancelled", answer=None, result=None))
+    assert "cancelled" in blocks[0]["text"]["text"]
+
+
 def test_locale():
     assert f.slack_locale_to_language("hi_IN") == "hi-IN"
     assert f.slack_locale_to_language(None) is None

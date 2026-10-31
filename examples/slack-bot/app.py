@@ -121,7 +121,8 @@ class MatihBot:
             return
         opts = self.opts(channel, self.language_for(slack, user))
         try:
-            job = self.matih.predictions.create(question, **opts)
+            # background=True returns the queued Job at once; create() would otherwise wait for it.
+            job = self.matih.predictions.create(question, background=True, **opts)
         except MitraError as exc:
             slack.chat_postMessage(channel=channel, thread_ts=thread_ts, text=fmt.error_text(exc))
             return
@@ -133,18 +134,19 @@ class MatihBot:
 
         def finish() -> None:
             try:
+                # A prediction usually takes one to five minutes; the server gives up after 30.
                 done = self.matih.jobs.wait(
                     job,
+                    timeout=31 * 60,
                     on_update=lambda j: log.info("job %s %s", j.id, j.state),
                     **{k: v for k, v in opts.items() if k == "workspace_id"},
                 )
             except MitraError as exc:
                 slack.chat_update(channel=channel, ts=ts, text=fmt.error_text(exc))
                 return
+            # A finished prediction's result is {conversation_id, answer}; answer is text.
             result = done.result or {}
             slack.chat_update(channel=channel, ts=ts, text=result.get("answer") or "Forecast ready.")
-            if result.get("image_url"):
-                self.upload_image(slack, channel, thread_ts, result["image_url"], "forecast.png", "Forecast")
 
         threading.Thread(target=finish, daemon=True).start()
 
