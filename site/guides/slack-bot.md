@@ -158,7 +158,7 @@ More in [Dashboard image previews](dashboard-previews.md) and [Gems feed](gems-f
 
 ### Errors are one friendly line
 
-Every Matih call sits in `try/except MitraError` and the message goes to the channel through `fmt.error_text`. The SDK's typed errors let you say something useful: `CreditsError` (402, tell an admin), `PermissionDeniedError` (403, a product is switched off for the key), `RateLimitError` (429, the SDK already waited and retried), `BusyError` (409, for example a prediction is still running in that conversation). See [Errors](../concepts/errors.md).
+Every Matih call sits in `try/except MitraError` and the message goes to the channel through `fmt.error_text`. The SDK's typed errors let you say something useful: `CreditsError` (402, tell an admin), `PermissionDeniedError` (403, a product is switched off for the key), `RateLimitError` (429, the SDK already waited and retried). See [Errors](../concepts/errors.md).
 
 ## Per-user mode with OAuth
 

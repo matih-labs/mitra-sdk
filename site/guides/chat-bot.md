@@ -72,7 +72,7 @@ The reply is an Answer. `status` is one of `answered`, `clarification`, `empty` 
     console.log(second.answer);
     ```
 
-Keep one question at a time running per conversation. If the same user sends two messages quickly, serialise them per user (a lock or a queue), because the second is a follow-up to the first answer. A `409` `busy` (the previous question in a conversation is still being worked on) is documented for predictive questions; if you meet it, wait a few seconds and retry the same request with the same `Idempotency-Key`.
+Keep one question at a time running per conversation. If the same user sends two messages quickly, serialise them per user (a lock or a queue), because the second is a follow-up to the first answer. The API does not answer a second question in a conversation with an error, so this ordering is yours to keep.
 
 ## Answers that take a while: respond-async
 
@@ -118,7 +118,7 @@ The skeleton below has one inbound route that stands in for your chat platform's
     import httpx
     from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
     from mitra import (
-        AsyncMitra, Answer, BusyError, CreditsError, MitraError, PermissionDeniedError,
+        AsyncMitra, Answer, CreditsError, MitraError, PermissionDeniedError,
         RateLimitError, verify_webhook,
     )
 
@@ -175,8 +175,6 @@ The skeleton below has one inbound route that stands in for your chat platform's
                     )
                     await deliver(user_id, answer)
                     return
-                except BusyError:
-                    await asyncio.sleep(3)                 # same conversation still running
                 except RateLimitError as e:
                     await asyncio.sleep(e.retry_after or 5)
                 except CreditsError as e:
@@ -243,7 +241,7 @@ The skeleton below has one inbound route that stands in for your chat platform's
     // npm i express @matihlabs/mitra
     // MATIH_API_KEY and MATIH_WEBHOOK_SECRET in the environment
     import express from "express";
-    import { Mitra, BusyError, CreditsError, RateLimitError, verifyWebhook } from "@matihlabs/mitra";
+    import { Mitra, CreditsError, RateLimitError, verifyWebhook } from "@matihlabs/mitra";
     import type { Answer } from "@matihlabs/mitra";
 
     const mitra = new Mitra({ apiKey: process.env.MATIH_API_KEY });
@@ -286,8 +284,7 @@ The skeleton below has one inbound route that stands in for your chat platform's
           );
           return await deliver(userId, answer);
         } catch (err) {
-          if (err instanceof BusyError) await new Promise((r) => setTimeout(r, 3000));
-          else if (err instanceof RateLimitError) await new Promise((r) => setTimeout(r, (err.retryAfter ?? 5) * 1000));
+          if (err instanceof RateLimitError) await new Promise((r) => setTimeout(r, (err.retryAfter ?? 5) * 1000));
           else if (err instanceof CreditsError) {
             return sendMessage(userId, "I am out of credits right now. Please tell an admin."); // 402: no retry
           } else {
@@ -367,7 +364,6 @@ Answers can carry an `image_url`: a signed link that expires in 15 minutes and n
 | `402` `not_ready` | The workspace pool is empty | Tell the user once; do not retry. An admin adds credits |
 | `402` `member_cap` | The member's monthly cap is reached | Tell the user a cap was reached |
 | `403` `scope` | **Ask** is off for the key | A deploy problem; alert yourself, tell the user it is unavailable |
-| `409` `busy` | The previous question in this conversation is still being worked on (documented for predictive questions) | Wait 3 to 5 s, retry with the same `Idempotency-Key` |
 | `429` | Rate limited; `Retry-After` gives seconds | Wait at least that long; the SDKs already retry twice |
 | `5xx` | Server error | Retry up to 3 times with backoff, then log the `request_id` |
 
