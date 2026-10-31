@@ -1,53 +1,47 @@
 name: release
 
-# Publishing happens only when a tag is pushed:
-#   py-vX.Y.Z  -> PyPI (trusted publishing, no stored token)
-#   ts-vX.Y.Z  -> npm (with provenance; needs the NPM_TOKEN secret)
+# Publishing happens only when a tag is pushed. One tag releases both packages, which
+# share a version:
+#   vX.Y.Z  -> PyPI  (trusted publishing, environment "pypi", no stored token)
+#           -> npm   (with provenance; needs the NPM_TOKEN secret)
+# Each job refuses to publish when the tag does not match its package version.
 
 on:
   push:
     tags:
-      - "py-v*"
-      - "ts-v*"
+      - "v*"
 
 permissions:
   contents: read
 
 jobs:
   publish-python:
-    if: startsWith(github.ref, 'refs/tags/py-v')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.12"
+          persist-credentials: false
+      # No actions/setup-python or pypa/gh-action-pypi-publish is pinned to a commit SHA
+      # (the organisation refuses anything else), so uv builds and publishes.
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       - name: Check the tag matches the package version
         working-directory: sdks/python
         run: |
-          tag="${GITHUB_REF_NAME#py-v}"
-          ver="$(python - <<'PY'
-          import tomllib
-          print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])
-          PY
-          )"
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(uv run --no-project python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           test "$tag" = "$ver" || { echo "tag $tag != pyproject version $ver" >&2; exit 1; }
       - name: Build
         working-directory: sdks/python
-        run: |
-          python -m pip install --upgrade pip build
-          python -m build
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: sdks/python/dist/
+        run: uv build --out-dir dist
+      - name: Publish to PyPI (trusted publishing)
+        working-directory: sdks/python
+        run: uv publish --trusted-publishing always dist/*
 
   publish-typescript:
-    if: startsWith(github.ref, 'refs/tags/ts-v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -56,14 +50,16 @@ jobs:
       run:
         working-directory: sdks/typescript
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
           registry-url: https://registry.npmjs.org
       - name: Check the tag matches the package version
         run: |
-          tag="${GITHUB_REF_NAME#ts-v}"
+          tag="${GITHUB_REF_NAME#v}"
           ver="$(node -p "require('./package.json').version")"
           test "$tag" = "$ver" || { echo "tag $tag != package.json version $ver" >&2; exit 1; }
       - name: Install

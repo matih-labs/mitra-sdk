@@ -20,14 +20,17 @@ jobs:
       matrix:
         python-version: ["3.10", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: ${{ matrix.python-version }}
+          persist-credentials: false
+      # The organisation refuses any action not pinned to a commit SHA, and no
+      # actions/setup-python is pinned, so uv provides Python.
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       - name: Install
         run: |
-          python -m pip install --upgrade pip
-          pip install -e "sdks/python[dev]"
+          uv venv --python "${{ matrix.python-version }}" "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" -e "sdks/python[dev]"
       - name: Lint
         working-directory: sdks/python
         run: ruff check .
@@ -45,8 +48,10 @@ jobs:
       matrix:
         node-version: [20, 22]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
       - name: Install
@@ -64,15 +69,16 @@ jobs:
   slack-bot:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.12"
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       - name: Install
         run: |
-          python -m pip install --upgrade pip
-          pip install -e "sdks/python[dev]"
-          pip install -r examples/slack-bot/requirements.txt
+          uv venv --python 3.12 "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" -e "sdks/python[dev]"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" -r examples/slack-bot/requirements.txt
       - name: Lint and test
         working-directory: examples/slack-bot
         run: |
