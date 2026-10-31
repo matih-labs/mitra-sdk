@@ -57,8 +57,17 @@ the workspace and checks their role again. So:
 
 For an app that acts for **each of its users** rather than for one shared identity, use OAuth 2.1:
 authorization code with PKCE, with dynamic client registration (DCR) so your app can register
-itself. Access tokens (`mto_`) act as the person who approved. Refresh tokens (`mtr_`) rotate: each
-refresh returns a new one and the old stops working. See [OAuth for multi-user apps](../guides/oauth.md).
+itself. Access tokens (`mto_`) act as the person who approved, and are accepted on `/api/v1` only.
+
+| | Prefix | Life |
+|---|---|---|
+| Access token | `mto_` | 1 hour, never past the grant |
+| Refresh token | `mtr_` | 30 days sliding; the grant ends 90 days after the person consented |
+
+Refresh tokens rotate: each refresh returns a new one and kills the old one, and presenting an old one again
+revokes the whole grant. People see and disconnect the apps they approved under **Connected apps** in Matih's
+settings, and admins see the apps acting in their workspace on **Settings › API & MCP**.
+See [OAuth for multi-user apps](../guides/oauth.md).
 
 ## Which should I use?
 
