@@ -8,13 +8,13 @@
 //   dotnet run -- --skip-predict
 //   dotnet run -- --background          (predict without Prefer: wait, start a job and poll it)
 //   dotnet run -- --upload ./sales.csv
-//   dotnet run -- --invite teammate@example.com --role ROLE   (admin action, never runs by default)
+//   dotnet run -- --invite teammate@example.com --role user   (admin action, never runs by default)
 // With the .NET 10 SDK a single file also runs directly: dotnet run Example.cs -- --skip-predict
 //
 // Environment:
 //   MATIH_API_KEY       required. Create one under Settings › API & MCP in Matih.
 //   MATIH_BASE_URL      optional. Default https://workspace.matih.ai ("/api/v1" is appended).
-//   MATIH_ON_DUPLICATE  optional. Passed as the on_duplicate form field of the file upload.
+//   MATIH_ON_DUPLICATE  optional. The on_duplicate form field of the file upload: ask (default) or keep_both.
 //
 // Teaching example. Do not commit your API key.
 
@@ -57,10 +57,10 @@ bool Has(string name) => Array.IndexOf(args, name) >= 0;
 
 var uploadPath = Flag("--upload");
 var inviteTarget = Flag("--invite");
-var inviteRole = Flag("--role");
-if (inviteTarget != null && inviteRole == null)
+var inviteRole = Flag("--role") ?? "user";
+if (inviteTarget != null && Array.IndexOf(new[] { "viewer", "user", "admin" }, inviteRole) < 0)
 {
-    Console.Error.WriteLine("--invite needs --role ROLE (valid values come from GET /members)");
+    Console.Error.WriteLine("--role must be viewer, user or admin");
     return 2;
 }
 
@@ -172,9 +172,10 @@ static class Examples
     }
 
     // Works on POST /gems/generate, /predictions and /dashboards/{id}/image. The server
-    // answers 200 or 201 when the work finished within N seconds, otherwise 202 with a Job.
-    // Either way this returns the result object; on 202 it falls back to polling the job.
-    // If a finished answer carries a Job (it has a "state"), its result field is used.
+    // answers 200 with the finished Job when the work finished within N seconds, otherwise
+    // 202 with the Job as it stands. Either way this returns the result object; on 202 it
+    // falls back to polling the job. A finished answer is a Job (it has a "state"), and its
+    // result field is used.
     private static async Task<JsonElement> RunWithWait(
         MatihClient c, string path, Func<HttpContent>? content, string? idempotencyKey,
         TimeSpan firstDelay, TimeSpan maxDelay, TimeSpan timeout)
@@ -223,8 +224,8 @@ static class Examples
 
     // (3) Dashboard image job.
     // Sync-with-fallback: wait=N, and if the job is still running, poll GET /jobs/{id}
-    // with a growing delay. image_url is a signed URL valid for about 15 minutes that
-    // needs no Authorization header.
+    // with a growing delay. image_url is a public, unguessable URL that expires after
+    // 15 minutes and needs no Authorization header.
     public static async Task DashboardImage(MatihClient c)
     {
         var (_, data) = await c.SendAsync(HttpMethod.Get, "/dashboards");
@@ -243,23 +244,13 @@ static class Examples
     }
 
     // (4) Predict.
-    // A prediction can run for up to 30 minutes. Poll every 5 to 10 seconds.
-    // Webhooks (prediction.completed) avoid polling.
+    // A prediction usually takes one to five minutes; the server gives up after 30.
+    // Poll every 5 to 10 seconds. Webhooks (prediction.completed) avoid polling.
+    // A finished prediction's result is {conversation_id, answer}; answer is a string.
     private static void PrintPrediction(JsonElement result)
     {
         Console.WriteLine($"answer: {Json.Str(result, "answer")}");
-        if (Json.Prop(result, "attachments") is { ValueKind: JsonValueKind.Array } attachments)
-        {
-            foreach (var attachment in attachments.EnumerateArray())
-            {
-                Console.WriteLine($"  attachment: {Json.Str(attachment, "type")}");
-            }
-        }
-        var image = Json.Str(result, "image_url");
-        if (image != null)
-        {
-            Console.WriteLine($"image_url: {image}");
-        }
+        Console.WriteLine($"conversation_id: {Json.Str(result, "conversation_id")} (pass it to POST /predictions to continue)");
     }
 
     // Sync-with-fallback: wait=N, then poll on 202.
@@ -297,8 +288,8 @@ static class Examples
             {
                 count++;
                 Console.WriteLine(
-                    $"  {Json.Str(s, "id")}  {Json.Str(s, "name")}  type={Json.Str(s, "type")}  " +
-                    $"status={Json.Str(s, "status")}  active={Json.Prop(s, "active")}");
+                    $"  {Json.Str(s, "id")}  {Json.Str(s, "name")}  connector_type={Json.Str(s, "connector_type")}  " +
+                    $"state={Json.Str(s, "state")}  active={Json.Prop(s, "is_active")}");
             }
         }
         if (count == 0)
@@ -308,8 +299,8 @@ static class Examples
     }
 
     // (6) Upload a CSV or Excel file (multipart, field name "file").
-    // Needs the files:write scope. The optional on_duplicate field says what to do
-    // when the same file was uploaded before.
+    // Needs the files:write scope. The optional on_duplicate field is "ask" (the default:
+    // an identical file waits for a decision) or "keep_both".
     public static async Task UploadFile(MatihClient c, string path)
     {
         var onDuplicate = Environment.GetEnvironmentVariable("MATIH_ON_DUPLICATE");
@@ -326,22 +317,29 @@ static class Examples
             return form;
         }
 
-        var (_, uploaded) = await c.SendAsync(HttpMethod.Post, "/files", Build);
+        // A file is a File, not a Job. "Prefer: wait=30" (up to 120) holds the request until
+        // it is ready; if processing is still running the answer is 202.
+        var (_, uploaded) = await c.SendAsync(HttpMethod.Post, "/files", Build, prefer: "wait=30");
         var id = Json.Str(uploaded, "id")!;
         var latest = uploaded;
-        Console.WriteLine($"uploaded: {id} status={Json.Str(latest, "status")}");
+        Console.WriteLine($"uploaded: {id} status={Json.Str(latest, "status")} ready={Json.Prop(latest, "ready")}");
 
-        // Processing is asynchronous. Needs the files:read scope to follow it.
-        for (var i = 0; i < 40 && Json.Str(latest, "status") == "processing"; i++)
+        // Follow it with GET /files/{id} (needs files:read) until Ask can use it, it needs
+        // attention or failed, or it waits for a duplicate decision.
+        static bool Settled(JsonElement f) =>
+            Json.Prop(f, "ready")?.ValueKind == JsonValueKind.True
+            || Json.Prop(f, "decision_required")?.ValueKind == JsonValueKind.True
+            || Json.Str(f, "status") is "needs_attention" or "failed";
+        for (var i = 0; i < 40 && !Settled(latest); i++)
         {
             await Task.Delay(TimeSpan.FromSeconds(3));
             (_, latest) = await c.SendAsync(HttpMethod.Get, $"/files/{Uri.EscapeDataString(id)}");
-            Console.WriteLine($"  status={Json.Str(latest, "status")}");
+            Console.WriteLine($"  status={Json.Str(latest, "status")} ready={Json.Prop(latest, "ready")}");
         }
         Console.WriteLine(Json.Pretty(latest));
         if (Json.Prop(latest, "decision_required")?.ValueKind == JsonValueKind.True)
         {
-            Console.WriteLine("the file needs a decision (duplicate handling); see POST /files/{id}/duplicate");
+            Console.WriteLine("the file is a duplicate and waits for a decision (see decision_options above); send it to POST /files/{id}/duplicate");
         }
     }
 
@@ -355,7 +353,7 @@ static class Examples
         };
 
     // (7) Invite a member (admin action, members:manage).
-    // Only runs when you pass --invite. Valid role values come from GET /members.
+    // Only runs when you pass --invite. role is viewer, user or admin (never owner).
     public static async Task InviteMember(MatihClient c, string target, string role)
     {
         var key = target.Contains('@') ? "email" : "phone";
@@ -417,8 +415,8 @@ sealed class MatihClient
     }
 
     // One request, returning the status code and decoded JSON body of a 2xx answer.
-    // On a 429 it honours Retry-After once and retries with the same Idempotency-Key, so a
-    // credit-costing call is never charged twice. content is a factory so a retry gets a
+    // On a 429 it honours Retry-After once and retries with the same Idempotency-Key (the
+    // server honours it on /ask and /predictions). content is a factory so a retry gets a
     // fresh body. prefer is an optional RFC 7240 Prefer header: "wait=30" or "respond-async".
     public async Task<(int Status, JsonElement Body)> SendAsync(
         HttpMethod method, string path, Func<HttpContent>? content = null,
