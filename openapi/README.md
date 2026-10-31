@@ -23,7 +23,7 @@ the API host.
 
 ## What the spec covers
 
-Endpoints are grouped by the OAuth scope they need: `workspaces:read`, `members:read`,
+Endpoints are grouped by the scope they need (on API keys and OAuth tokens alike; a scope only narrows, the workspace role is checked first). The 13 scopes: `workspaces:read`, `members:read`,
 `members:manage`, `sources:read`, `sources:write`, `files:read`, `files:write`, `gems:read`,
 `gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`. File endpoints use
 `files:*`: `GET /files` and `GET /files/{id}` need `files:read`; `POST /files`,
