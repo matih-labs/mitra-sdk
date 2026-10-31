@@ -19,6 +19,14 @@ skip silently.
 The live spec and interactive docs are always at `/api/v1/openapi.json` and `/api/v1/docs` on
 the API host.
 
+## What the spec covers
+
+Endpoints are grouped by the OAuth scope they need: `workspaces:read`, `members:read`,
+`members:manage`, `sources:read`, `sources:write`, `gems:read`, `gems:generate`, `ask`,
+`dashboards:read`, `predict`, `webhooks:manage`. Admin endpoints (members, invitations, sources,
+files, webhooks) additionally require the matching workspace role. Errors use
+`{"detail": {"category", "message", "code?"}}`.
+
 ## Generating clients locally
 
 ```bash

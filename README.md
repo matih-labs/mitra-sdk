@@ -17,6 +17,8 @@ MCP setup guide, an agent skill, and examples such as a Slack bot.
 - Get a dashboard as an image
 - Ask predictive questions (forecasts, what-ifs) as background jobs
 - Receive signed webhooks when long work finishes
+- Admin work with the right scopes: list and invite members, change roles, connect or remove
+  sources, upload and manage files, manage webhooks
 
 ## Quickstart
 
@@ -70,6 +72,12 @@ pinned to one workspace, acts as the member who created it and never exceeds the
 OAuth 2.1 access token (`mto_...`, authorization code with PKCE and dynamic client
 registration; discovery at `/.well-known/oauth-authorization-server`). OAuth tokens choose a
 workspace with the `X-Matih-Workspace` header or `PUT /me/workspace`.
+
+## Scopes
+
+`workspaces:read`, `members:read`, `members:manage`, `sources:read`, `sources:write`,
+`gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`.
+A key or token never exceeds the role of the member it acts as, whatever scopes it has.
 
 ## Links
 
