@@ -88,6 +88,14 @@ class JobTimeoutError(MitraError):
         self.job = job
 
 
+class SourceTestFailedError(MitraError):
+    """422 from ``sources.create``: the connection test failed. ``test_result`` has the details."""
+
+    def __init__(self, message: str, *, test_result: Any = None, **kwargs: Any) -> None:
+        super().__init__(message, **kwargs)
+        self.test_result = test_result
+
+
 class WebhookVerificationError(ValueError):
     """The ``Matih-Signature`` header is missing, malformed, stale or does not match."""
 
@@ -106,6 +114,8 @@ def error_from_response(
     *,
     request_id: str | None = None,
     retry_after: float | None = None,
+    method: str | None = None,
+    path: str | None = None,
 ) -> MitraError:
     """Build the right exception for an error response body."""
     detail = body.get("detail") if isinstance(body, dict) else None
@@ -125,6 +135,9 @@ def error_from_response(
         "request_id": request_id,
         "body": body,
     }
+    if status == 422 and method == "POST" and path and path.rstrip("/").endswith("/sources"):
+        test_result = body.get("detail", body) if isinstance(body, dict) else body
+        return SourceTestFailedError(message, test_result=test_result, **kwargs)
     if status == 429:
         return RateLimitError(message, retry_after=retry_after, **kwargs)
     return _STATUS_CLASSES.get(status, MitraError)(message, **kwargs)

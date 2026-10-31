@@ -142,6 +142,8 @@ def raise_for_response(response: httpx.Response) -> None:
         body,
         request_id=response.headers.get("x-request-id"),
         retry_after=retry_after,
+        method=response.request.method,
+        path=response.request.url.path,
     )
 
 

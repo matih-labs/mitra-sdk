@@ -11,6 +11,7 @@ from .errors import (
     MitraError,
     PermissionDeniedError,
     RateLimitError,
+    SourceTestFailedError,
     WebhookVerificationError,
 )
 from .models import (
@@ -20,6 +21,7 @@ from .models import (
     File,
     Gem,
     GemList,
+    Heard,
     Job,
     ResultTable,
     Source,
@@ -41,6 +43,7 @@ __all__ = [
     "File",
     "Gem",
     "GemList",
+    "Heard",
     "Job",
     "JobFailedError",
     "JobTimeoutError",
@@ -50,6 +53,7 @@ __all__ = [
     "RateLimitError",
     "ResultTable",
     "Source",
+    "SourceTestFailedError",
     "StreamEvent",
     "Webhook",
     "WebhookVerificationError",

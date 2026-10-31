@@ -48,7 +48,8 @@ follow_up = client.ask(answer.follow_ups[0], conversation_id=answer.conversation
 Questions may be in any of 22 Indian languages and are auto-detected; pass `language="hi-IN"` to
 force the response language. Data values, column names and figures are never translated.
 
-Voice notes: `client.ask_audio("note.ogg")`.
+Voice notes: `answer = client.ask_audio("note.ogg", language="hi-IN")`; `answer.heard` holds the
+transcript and detected language.
 
 ### Streaming
 
@@ -87,19 +88,40 @@ reuse it across retries, so a retry is never charged twice. Pass `idempotency_ke
 
 ```python
 client.sources.list()
+client.sources.get("src_1")                               # includes readiness
 client.sources.connectors()
 client.sources.test({"type": "postgres", "host": "...", "database": "..."})
-client.sources.create({...}, activate=True)               # admin key with sources:write
+try:
+    client.sources.create({...}, activate=True)           # admin, sources:write
+except SourceTestFailedError as e:                        # HTTP 422
+    print(e.test_result)
+client.sources.activate("src_1"); client.sources.delete("src_1")
 
-f = client.files.upload("sales.csv")                      # CSV or Excel
-client.files.get(f.id)
+f = client.files.upload("sales.csv", on_duplicate="replace")   # CSV or Excel
+client.files.get(f.id)          # status, analysis state, decision_required
+client.files.duplicate(f.id, "keep_both")                 # answer a duplicate prompt
+client.files.list(); client.files.delete(f.id)
+```
+
+## Members and invitations
+
+Needs `members:read` / `members:manage`; only do these when a person asked for them.
+
+```python
+client.members.list()
+client.invitations.create("member", email="new@example.com")   # or phone="+91..."
+client.invitations.list(); client.invitations.revoke("inv_1")
+client.members.update("mem_1", "admin"); client.members.remove("mem_1")
 ```
 
 ## Webhooks
 
 ```python
 hook = client.webhooks.create("https://example.com/hooks/matih", ["prediction.completed"])
-print(hook.secret)   # shown once
+print(hook.secret)   # whsec_..., shown once
+client.webhooks.test(hook.id); client.webhooks.deliveries(hook.id)
+
+# Deliveries carry Matih-Signature, Matih-Event and Matih-Delivery headers.
 
 # In your web handler, with the RAW request body:
 from mitra import verify_webhook
@@ -128,7 +150,7 @@ asyncio.run(main())
 All API errors derive from `MitraError` with `.status`, `.category`, `.code`, `.request_id` and
 `.body`. Subclasses: `AuthError` (401), `PermissionDeniedError` (403: `scope`, `workspace_role`,
 `source_access`), `CreditsError` (402: `credits`, `member_cap`), `BusyError` (409),
-`RateLimitError` (429, `.retry_after`), plus `JobFailedError`, `JobTimeoutError`. 429 is retried
+`RateLimitError` (429, `.retry_after`), `SourceTestFailedError` (422 from `sources.create`, `.test_result`), plus `JobFailedError`, `JobTimeoutError`. 429 is retried
 automatically (honouring `Retry-After`) up to `max_retries` (default 2), as are 5xx and network
 errors on GETs and on calls with an idempotency key.
 

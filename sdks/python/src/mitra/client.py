@@ -56,6 +56,13 @@ def _file_part(
     return name, content, content_type
 
 
+def _audio_fields(
+    conversation_id: str | None, source_id: str | None, language: str | None
+) -> dict[str, str]:
+    fields = {"conversation_id": conversation_id, "source_id": source_id, "language": language}
+    return {k: v for k, v in fields.items() if v}
+
+
 def _poll_delays(interval: float, max_interval: float) -> Iterator[float]:
     delay = interval
     while True:
@@ -98,11 +105,22 @@ class _Sources(_Resources):
     def test(self, config: dict[str, Any], **opts: _Opts) -> Any:
         return self._c.request("POST", "/sources/test", json_body={"config": config}, **opts)
 
-    def create(self, config: dict[str, Any], *, activate: bool | None = None, **opts: _Opts) -> Any:
-        body: dict[str, Any] = {"config": config}
-        if activate is not None:
-            body["activate"] = activate
-        return self._c.request("POST", "/sources", json_body=body, **opts)
+    def get(self, source_id: str, **opts: _Opts) -> Any:
+        """One source, including its readiness."""
+        return self._c.request("GET", f"/sources/{source_id}", **opts)
+
+    def create(self, config: dict[str, Any], *, activate: bool = True, **opts: _Opts) -> Any:
+        """Connect a source (admin, ``sources:write``). Raises :class:`SourceTestFailedError`
+        (HTTP 422, with ``.test_result``) when the connection test fails."""
+        return self._c.request(
+            "POST", "/sources", json_body={"config": config, "activate": activate}, **opts
+        )
+
+    def activate(self, source_id: str, **opts: _Opts) -> Any:
+        return self._c.request("POST", f"/sources/{source_id}/activate", **opts)
+
+    def delete(self, source_id: str, **opts: _Opts) -> Any:
+        return self._c.request("DELETE", f"/sources/{source_id}", **opts)
 
     def connectors(self, **opts: _Opts) -> Any:
         return self._c.request("GET", "/connectors", **opts)
@@ -115,16 +133,37 @@ class _Files(_Resources):
         *,
         filename: str | None = None,
         content_type: str | None = None,
+        on_duplicate: str | None = None,
         **opts: _Opts,
     ) -> Any:
-        """Upload a CSV or Excel file. Returns a :class:`File`; poll ``files.get`` until ready."""
+        """Upload a CSV or Excel file (``sources:write``). Returns a :class:`File`; poll
+        ``files.get`` until ready. ``on_duplicate`` says what to do if the file already exists;
+        without it a ``decision_required`` file waits for ``files.duplicate``."""
         part = _file_part(file, filename, content_type)
         return self._c.request(
-            "POST", "/files", files={"file": part}, parse=File.model_validate, **opts
+            "POST",
+            "/files",
+            files={"file": part},
+            data={"on_duplicate": on_duplicate} if on_duplicate else None,
+            parse=File.model_validate,
+            **opts,
         )
 
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/files", **opts)
+
     def get(self, file_id: str, **opts: _Opts) -> Any:
+        """Status, analysis state and ``decision_required`` for one file."""
         return self._c.request("GET", f"/files/{file_id}", parse=File.model_validate, **opts)
+
+    def duplicate(self, file_id: str, decision: str, **opts: _Opts) -> Any:
+        """Answer a ``decision_required`` duplicate prompt."""
+        return self._c.request(
+            "POST", f"/files/{file_id}/duplicate", json_body={"decision": decision}, **opts
+        )
+
+    def delete(self, file_id: str, **opts: _Opts) -> Any:
+        return self._c.request("DELETE", f"/files/{file_id}", **opts)
 
 
 class _Gems(_Resources):
@@ -203,6 +242,43 @@ class _Webhooks(_Resources):
 
     def delete(self, webhook_id: str, **opts: _Opts) -> Any:
         return self._c.request("DELETE", f"/webhooks/{webhook_id}", **opts)
+
+    def test(self, webhook_id: str, **opts: _Opts) -> Any:
+        """Send a test delivery to the webhook URL."""
+        return self._c.request("POST", f"/webhooks/{webhook_id}/test", **opts)
+
+    def deliveries(self, webhook_id: str, **opts: _Opts) -> Any:
+        return self._c.request("GET", f"/webhooks/{webhook_id}/deliveries", **opts)
+
+
+class _Members(_Resources):
+    """Needs ``members:read`` (list) or ``members:manage`` (change role, remove)."""
+
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/members", **opts)
+
+    def update(self, member_id: str, role: str, **opts: _Opts) -> Any:
+        return self._c.request("PATCH", f"/members/{member_id}", json_body={"role": role}, **opts)
+
+    def remove(self, member_id: str, **opts: _Opts) -> Any:
+        return self._c.request("DELETE", f"/members/{member_id}", **opts)
+
+
+class _Invitations(_Resources):
+    def create(
+        self, role: str, *, email: str | None = None, phone: str | None = None, **opts: _Opts
+    ) -> Any:
+        """Invite by ``email`` or ``phone`` (``members:manage``)."""
+        if bool(email) == bool(phone):
+            raise ValueError("pass exactly one of email= or phone=")
+        body = {"role": role, **({"email": email} if email else {"phone": phone})}
+        return self._c.request("POST", "/invitations", json_body=body, **opts)
+
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/invitations", **opts)
+
+    def revoke(self, invitation_id: str, **opts: _Opts) -> Any:
+        return self._c.request("DELETE", f"/invitations/{invitation_id}", **opts)
 
 
 class _Conversations(_Resources):
@@ -397,6 +473,8 @@ class Mitra:
         self.jobs = _SyncJobs(core)
         self.webhooks = _Webhooks(core)
         self.conversations = _Conversations(core)
+        self.members = _Members(core)
+        self.invitations = _Invitations(core)
         core.jobs = self.jobs  # type: ignore[attr-defined]
         self.settings = settings
 
@@ -455,10 +533,12 @@ class Mitra:
         content_type: str | None = None,
         conversation_id: str | None = None,
         source_id: str | None = None,
+        language: str | None = None,
         **opts: _Opts,
     ) -> Answer:
-        """Ask by voice note (``POST /ask/audio``). The language is detected from speech."""
-        data = {k: v for k, v in {"conversation_id": conversation_id, "source_id": source_id}.items() if v}
+        """Ask by voice note (``POST /ask/audio``). ``answer.heard`` has the transcript and the
+        detected language; pass ``language`` to force the response language."""
+        data = _audio_fields(conversation_id, source_id, language)
         return self._core.request(
             "POST",
             "/ask/audio",
@@ -632,6 +712,8 @@ class AsyncMitra:
         self.jobs = _AsyncJobs(core)
         self.webhooks = _Webhooks(core)
         self.conversations = _Conversations(core)
+        self.members = _Members(core)
+        self.invitations = _Invitations(core)
         core.jobs = self.jobs  # type: ignore[attr-defined]
         self.settings = settings
 
@@ -688,9 +770,10 @@ class AsyncMitra:
         content_type: str | None = None,
         conversation_id: str | None = None,
         source_id: str | None = None,
+        language: str | None = None,
         **opts: _Opts,
     ) -> Answer:
-        data = {k: v for k, v in {"conversation_id": conversation_id, "source_id": source_id}.items() if v}
+        data = _audio_fields(conversation_id, source_id, language)
         return await self._core.request(
             "POST",
             "/ask/audio",

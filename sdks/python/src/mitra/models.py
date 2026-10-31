@@ -32,6 +32,13 @@ class Clarification(_Model):
     options: list[str] = Field(default_factory=list)
 
 
+class Heard(_Model):
+    """What speech recognition heard in a voice note (``ask_audio``)."""
+
+    transcript: str | None = None
+    language: str | None = None
+
+
 class Answer(_Model):
     """Result of ``ask``. ``status`` is ``answered``, ``clarification``, ``empty`` or ``error``."""
 
@@ -45,6 +52,7 @@ class Answer(_Model):
     conversation_id: str | None = None
     request_id: str | None = None
     language: str | None = None
+    heard: Heard | None = None
 
 
 class JobError(_Model):
