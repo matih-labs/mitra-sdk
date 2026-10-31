@@ -99,12 +99,12 @@ describe("parseRetryAfter", () => {
 
 describe("errors from the client", () => {
   it("throws CreditsError with category and request id", async () => {
-    const m = sequence(jsonResponse(detail("credits", "Out of credits"), 402, { "x-request-id": "req_7" }));
+    const m = sequence(jsonResponse(detail("not_ready", "Out of credits"), 402, { "x-request-id": "req_7" }));
     const err = await makeClient(m.fetch).ask("q").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CreditsError);
     const e = err as CreditsError;
     expect(e.status).toBe(402);
-    expect(e.category).toBe("credits");
+    expect(e.category).toBe("not_ready");
     expect(e.requestId).toBe("req_7");
     expect(m.calls).toHaveLength(1);
   });
@@ -114,9 +114,9 @@ describe("errors from the client", () => {
     await expect(makeClient(m.fetch).workspaces.list()).rejects.toBeInstanceOf(AuthError);
   });
 
-  it("throws BusyError for 409", async () => {
-    const m = sequence(jsonResponse(detail("busy", "Another job is running"), 409));
-    await expect(makeClient(m.fetch).gems.generate("src_1")).rejects.toBeInstanceOf(BusyError);
+  it("throws BusyError for 409 (a conflict, not a busy server)", async () => {
+    const m = sequence(jsonResponse(detail("conflict", "The invitation is no longer open"), 409));
+    await expect(makeClient(m.fetch).invitations.revoke("inv_1")).rejects.toBeInstanceOf(BusyError);
   });
 
   it("throws RateLimitError after retries are exhausted", async () => {

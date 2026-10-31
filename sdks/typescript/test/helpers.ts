@@ -5,6 +5,7 @@ export interface Call {
   method: string;
   headers: Headers;
   body: BodyInit | null | undefined;
+  redirect: RequestRedirect | undefined;
 }
 
 export type Handler = (call: Call) => Response | Promise<Response>;
@@ -23,6 +24,7 @@ export function sequence(...handlers: Handler[]): { fetch: typeof fetch; calls: 
       method: init?.method ?? "GET",
       headers: new Headers(init?.headers),
       body: init?.body,
+      redirect: init?.redirect,
     };
     calls.push(call);
     const handler = handlers[Math.min(index, handlers.length - 1)] as Handler;
@@ -79,3 +81,50 @@ export const ANSWER = {
   request_id: "req_1",
   language: "en-IN",
 };
+
+/** A Source as the server returns it; `phase` is ready, building or not_connected. */
+export function sourceBody(phase: "ready" | "building" | "not_connected" = "ready", extra: Record<string, unknown> = {}) {
+  return {
+    id: "s1",
+    name: "Orders DB",
+    connector_type: "postgres",
+    settings: {},
+    secret_fields_set: ["password"],
+    state: "connected",
+    is_active: true,
+    is_sample: false,
+    created_at: "2026-10-31T00:00:00Z",
+    updated_at: "2026-10-31T00:00:01Z",
+    readiness: { source_id: "s1", state: "connected", phase, can_ask: phase === "ready", message: "x" },
+    ...extra,
+  };
+}
+
+/** What `POST /sources` answers with (201). */
+export function sourceCreatedBody(phase: "ready" | "building" | "not_connected" = "ready") {
+  return {
+    source: sourceBody(phase),
+    test: { ok: true, connector_type: "postgres", duration_ms: 12, message: "ok" },
+    applied: true,
+    catalog_job_id: "cj1",
+  };
+}
+
+/** A file as the server returns it. */
+export function fileBody(status: string, extra: Record<string, unknown> = {}) {
+  return {
+    id: "f1",
+    name: "sales.csv",
+    format: "csv",
+    size_bytes: 10,
+    status,
+    ready: status === "ready",
+    warnings: [],
+    retryable: false,
+    decision_options: [],
+    tables: [],
+    created_at: "2026-10-31T00:00:00Z",
+    updated_at: "2026-10-31T00:00:01Z",
+    ...extra,
+  };
+}

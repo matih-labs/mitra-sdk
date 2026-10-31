@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectionError, Mitra, MitraError, RateLimitError } from "../src/index.js";
-import { ANSWER, jobBody, jsonResponse, makeClient, networkError, sequence, textResponse } from "./helpers.js";
+import { ANSWER, fileBody, jobBody, jsonResponse, makeClient, networkError, sequence, textResponse } from "./helpers.js";
 
 const BASE = "https://workspace.matih.ai/api/v1";
 
@@ -10,8 +10,10 @@ afterEach(() => {
 
 describe("construction", () => {
   it("requires a credential", () => {
-    vi.stubEnv("MITRA_API_KEY", "");
-    vi.stubEnv("MITRA_ACCESS_TOKEN", "");
+    vi.stubEnv("MATIH_API_KEY", "");
+    vi.stubEnv("MATIH_ACCESS_TOKEN", "");
+    // The old, product-specific names are not read any more.
+    vi.stubEnv("MITRA_API_KEY", "mtk_old");
     expect(() => new Mitra({ fetch: sequence(jsonResponse({})).fetch })).toThrow(TypeError);
   });
 
@@ -19,8 +21,8 @@ describe("construction", () => {
     expect(() => new Mitra({ apiKey: "mtk_a", accessToken: "mto_b" })).toThrow(TypeError);
   });
 
-  it("reads MITRA_API_KEY from the environment", async () => {
-    vi.stubEnv("MITRA_API_KEY", "mtk_env");
+  it("reads MATIH_API_KEY from the environment", async () => {
+    vi.stubEnv("MATIH_API_KEY", "mtk_env");
     const m = sequence(jsonResponse({ current: null, workspaces: [] }));
     await new Mitra({ fetch: m.fetch }).workspaces.list();
     expect(m.calls[0].headers.get("authorization")).toBe("Bearer mtk_env");
@@ -30,6 +32,28 @@ describe("construction", () => {
     const m = sequence(jsonResponse({ current: null, workspaces: [] }));
     await new Mitra({ accessToken: "mto_abc", fetch: m.fetch }).workspaces.list();
     expect(m.calls[0].headers.get("authorization")).toBe("Bearer mto_abc");
+  });
+});
+
+describe("base URL", () => {
+  it("defaults to the host and appends /api/v1", async () => {
+    vi.stubEnv("MATIH_BASE_URL", "");
+    const m = sequence(jsonResponse({ current: null, workspaces: [] }));
+    await new Mitra({ apiKey: "mtk_a", fetch: m.fetch }).workspaces.list();
+    expect(m.calls[0].url).toBe("https://workspace.matih.ai/api/v1/workspaces");
+  });
+
+  it("reads MATIH_BASE_URL as a host only", async () => {
+    vi.stubEnv("MATIH_BASE_URL", "https://feat.example.test/");
+    const m = sequence(jsonResponse({ current: null, workspaces: [] }));
+    await new Mitra({ apiKey: "mtk_a", fetch: m.fetch }).workspaces.list();
+    expect(m.calls[0].url).toBe("https://feat.example.test/api/v1/workspaces");
+  });
+
+  it("does not double the prefix when the value already ends in /api/v1", async () => {
+    const m = sequence(jsonResponse({ sources: [] }));
+    await makeClient(m.fetch, { baseUrl: "https://api.example.test/api/v1/" }).sources.list();
+    expect(m.calls[0].url).toBe("https://api.example.test/api/v1/sources");
   });
 });
 
@@ -55,9 +79,10 @@ describe("headers", () => {
   });
 
   it("workspaces.use sets the default for later calls", async () => {
-    const m = sequence(jsonResponse({}), jsonResponse({ current: "ws_9", workspaces: [] }));
+    const m = sequence(jsonResponse({ current: "ws_9", name: "Globex" }), jsonResponse({ current: "ws_9", workspaces: [] }));
     const c = makeClient(m.fetch);
-    await c.workspaces.use("ws_9");
+    const chosen = await c.workspaces.use("ws_9");
+    expect(chosen).toEqual({ current: "ws_9", name: "Globex" });
     expect(m.calls[0].method).toBe("PUT");
     expect(m.calls[0].url).toBe(`${BASE}/me/workspace`);
     expect(JSON.parse(String(m.calls[0].body))).toEqual({ workspace_id: "ws_9" });
@@ -65,10 +90,10 @@ describe("headers", () => {
     expect(m.calls[1].headers.get("x-matih-workspace")).toBe("ws_9");
   });
 
-  it("honours a custom baseUrl without a trailing slash", async () => {
+  it("honours a custom host with a trailing slash", async () => {
     const m = sequence(jsonResponse({ sources: [] }));
-    await makeClient(m.fetch, { baseUrl: "https://api.example.test/v1/" }).sources.list();
-    expect(m.calls[0].url).toBe("https://api.example.test/v1/sources");
+    await makeClient(m.fetch, { baseUrl: "https://api.example.test/" }).sources.list();
+    expect(m.calls[0].url).toBe("https://api.example.test/api/v1/sources");
   });
 });
 
@@ -132,7 +157,8 @@ describe("ask", () => {
     expect(form.get("language")).toBe("hi-IN");
     expect(call.headers.get("accept-language")).toBe("hi-IN");
     expect(call.headers.get("content-type")).toBeNull();
-    expect(call.headers.get("idempotency-key")).toBeTruthy();
+    // The server's /ask/audio route takes no Idempotency-Key.
+    expect(call.headers.get("idempotency-key")).toBeNull();
   });
 });
 
@@ -253,15 +279,15 @@ describe("namespaces", () => {
     expect(m.calls[0].url).toBe(`${BASE}/gems?source_id=src+1`);
   });
 
-  it("starts gem generation with an idempotency key", async () => {
+  it("starts gem generation without an idempotency key", async () => {
     const m = sequence(jsonResponse(jobBody("queued", { kind: "gems" }), 202));
     const job = await makeClient(m.fetch).gems.generate("src_1", { background: true });
     expect(job.state).toBe("queued");
     expect(JSON.parse(String(m.calls[0].body))).toEqual({ source_id: "src_1" });
-    expect(m.calls[0].headers.get("idempotency-key")).toBeTruthy();
+    expect(m.calls[0].headers.get("idempotency-key")).toBeNull();
   });
 
-  it("creates predictions and dashboard images with idempotency keys", async () => {
+  it("creates a prediction with an idempotency key and a dashboard image without one", async () => {
     const m = sequence(jsonResponse(jobBody("queued"), 202));
     const c = makeClient(m.fetch);
     await c.predictions.create({ question: "next quarter?" }, { background: true });
@@ -269,7 +295,7 @@ describe("namespaces", () => {
     expect(m.calls[0].url).toBe(`${BASE}/predictions`);
     expect(m.calls[1].url).toBe(`${BASE}/dashboards/dash%2F1/image`);
     expect(m.calls[0].headers.get("idempotency-key")).toBeTruthy();
-    expect(m.calls[1].headers.get("idempotency-key")).toBeTruthy();
+    expect(m.calls[1].headers.get("idempotency-key")).toBeNull();
   });
 
   it("does not add an idempotency key to non-credit POSTs", async () => {
@@ -286,12 +312,12 @@ describe("namespaces", () => {
   });
 
   it("uploads a file as multipart", async () => {
-    const m = sequence(jsonResponse({ id: "file_1", status: "processing" }));
+    const m = sequence(jsonResponse(fileBody("ready"), 201));
     const out = await makeClient(m.fetch).files.upload(new Blob(["a,b\n1,2"]), {
       filename: "x.csv",
       contentType: "text/csv",
     });
-    expect(out.id).toBe("file_1");
+    expect(out.id).toBe("f1");
     expect(m.calls[0].body).toBeInstanceOf(FormData);
     expect((m.calls[0].body as FormData).has("file")).toBe(true);
     expect(m.calls[0].headers.get("content-type")).toBeNull();
