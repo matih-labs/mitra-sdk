@@ -19,5 +19,4 @@
 .md-typeset .grid.cards > ul > li { border-radius: 8px; }
 .md-typeset table:not([class]) { font-size: 0.78rem; }
 .md-typeset .tabbed-labels > label { font-size: 0.72rem; }
-#redoc-host { margin: 0 -0.8rem; }
-.md-content--api .md-content__inner { margin: 0; }
+#redoc-host { margin: 0; min-height: 4rem; }
