@@ -352,10 +352,11 @@ export class MatihEmbed extends HostBase {
         if (this.frameEl === frame) {
           this.fail("token_unavailable", err instanceof Error ? err.message : String(err));
         }
-      } finally {
-        if (this.refreshing === work) this.refreshing = null;
       }
-    })();
+    })().finally(() => {
+      // Runs after `refreshing` is set below: a finally callback is always asynchronous.
+      if (this.refreshing === work) this.refreshing = null;
+    });
     this.refreshing = work;
     return work;
   }
