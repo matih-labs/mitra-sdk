@@ -1,0 +1,83 @@
+name: sync-spec
+
+on:
+  repository_dispatch:
+    types: [spec-updated]
+  workflow_dispatch:
+    inputs:
+      spec_url:
+        description: URL of the OpenAPI document to copy
+        required: false
+        default: https://workspace.matih.ai/api/v1/openapi.json
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-spec
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve inputs
+        id: in
+        env:
+          DISPATCH_URL: ${{ github.event.client_payload.spec_url }}
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          MANUAL_URL: ${{ github.event.inputs.spec_url }}
+        run: |
+          url="${DISPATCH_URL:-${MANUAL_URL:-https://workspace.matih.ai/api/v1/openapi.json}}"
+          case "$url" in
+            https://*) ;;
+            *) echo "spec_url must be https" >&2; exit 1 ;;
+          esac
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "version=${DISPATCH_VERSION:-manual}" >> "$GITHUB_OUTPUT"
+
+      - name: Download spec
+        env:
+          SPEC_URL: ${{ steps.in.outputs.url }}
+        run: |
+          mkdir -p openapi
+          curl -fsSL --retry 3 "$SPEC_URL" -o openapi/openapi.json.new
+          python3 - <<'PY'
+          import json
+          with open("openapi/openapi.json.new") as f:
+              spec = json.load(f)
+          assert str(spec.get("openapi", "")).startswith("3."), "not an OpenAPI 3 document"
+          with open("openapi/openapi.json", "w") as f:
+              json.dump(spec, f, indent=2, sort_keys=True)
+              f.write("\n")
+          PY
+          rm -f openapi/openapi.json.new
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Regenerate TypeScript types
+        working-directory: sdks/typescript
+        run: |
+          npm install --no-audit --no-fund
+          npm run generate
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v7.0.5
+        with:
+          branch: automation/spec-${{ steps.in.outputs.version }}
+          commit-message: "chore(openapi): sync spec ${{ steps.in.outputs.version }}"
+          title: "chore(openapi): sync spec ${{ steps.in.outputs.version }}"
+          body: |
+            Automated copy of the Matih API OpenAPI spec (version `${{ steps.in.outputs.version }}`)
+            from `${{ steps.in.outputs.url }}`.
+
+            Review the diff, check that the SDK tests still pass, and add a CHANGELOG entry
+            for any user-visible change.
+          add-paths: |
+            openapi/openapi.json
+          delete-branch: true

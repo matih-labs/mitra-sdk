@@ -1,30 +1,85 @@
 # mitra-sdk
 
-Client-side tools for the Matih public API: the OpenAPI spec, SDKs, an MCP setup guide,
-agent skills, and examples such as a Slack bot.
+Client-side tools for the Matih public API: the OpenAPI spec, Python and TypeScript SDKs, an
+MCP setup guide, an agent skill, and examples such as a Slack bot.
 
-> **Status: pre-release.** The versioned API (`/api/v1`) is being built. Nothing in this
-> repository can be used against production yet. Watch releases for the first published spec.
+> **Status: pre-release.** The versioned API (`/api/v1`) is being rolled out. Until v1 is live
+> the SDKs here are not published to PyPI or npm and the examples will not work against
+> production. Watch releases for the first published spec and package versions.
 
-## What the API will let you do
+## What the API lets you do
 
 - List the workspaces you belong to and choose which one a request runs in
-- List and connect data sources
-- Read Gems (evidence-backed findings), with a chart image for each
-- Ask questions in plain language and get an answer, the data, and a chart image
-- Get a dashboard as an image preview
+- List, test and connect data sources, or upload a CSV/Excel file
+- Read Gems (evidence-backed findings), each with a chart image
+- Ask questions in plain language, in any of 22 Indian languages (text or a voice note), and get
+  an answer, the data and a chart image
+- Get a dashboard as an image
 - Ask predictive questions (forecasts, what-ifs) as background jobs
+- Receive signed webhooks when long work finishes
+
+## Quickstart
+
+Create an API key as a workspace admin under **Settings, Integrations**, then:
+
+```bash
+export MATIH_API_KEY=mtk_...   # never commit this
+curl -s https://workspace.matih.ai/api/v1/ask \
+  -H "Authorization: Bearer $MATIH_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Accept-Language: en-IN" \
+  -d '{"question": "What were last month'"'"'s sales by region?"}'
+```
+
+Python:
+
+```python
+from mitra import Mitra
+
+client = Mitra(api_key="mtk_...")
+answer = client.ask("What were last month's sales by region?")
+print(answer.answer)
+```
+
+TypeScript:
+
+```ts
+import { Mitra } from "@matihlabs/mitra";
+
+const client = new Mitra({ apiKey: process.env.MATIH_API_KEY });
+const answer = await client.ask("What were last month's sales by region?");
+console.log(answer.answer);
+```
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `openapi/` | The published OpenAPI 3.1 spec for `/api/v1`, copied here on each API release |
-| `sdks/python/` | Python client generated from the spec |
-| `sdks/typescript/` | TypeScript client generated from the spec |
-| `mcp/` | How to connect an MCP client (Claude, Cursor, …) to Matih's hosted MCP endpoint |
-| `skills/matih/` | Agent skill (`SKILL.md`) describing how an agent should use Matih |
-| `examples/slack-bot/` | Reference Slack bot built on the SDK |
+| `openapi/` | The OpenAPI 3.1 spec for `/api/v1`, copied here from the server on each release |
+| `sdks/python/` | `mitra-sdk` (import `mitra`): sync and async clients on httpx, pydantic models |
+| `sdks/typescript/` | `@matihlabs/mitra`: typed client on openapi-fetch, SSE streaming |
+| `skills/matih/` | Agent skill (`SKILL.md` and references) for using Matih from an AI agent |
+| `mcp/` | Connect Claude, Cursor, VS Code, ChatGPT and others to the hosted MCP endpoint |
+| `examples/curl/` | Copy-paste curl recipes for every endpoint |
+| `examples/slack-bot/` | Reference Slack bot (Socket Mode) built on the Python SDK |
+
+## Authentication in one paragraph
+
+Send `Authorization: Bearer <credential>`. A credential is either an API key (`mtk_...`,
+pinned to one workspace, acts as the member who created it and never exceeds their role) or an
+OAuth 2.1 access token (`mto_...`, authorization code with PKCE and dynamic client
+registration; discovery at `/.well-known/oauth-authorization-server`). OAuth tokens choose a
+workspace with the `X-Matih-Workspace` header or `PUT /me/workspace`.
+
+## Links
+
+- Live spec: `https://workspace.matih.ai/api/v1/openapi.json`, docs: `https://workspace.matih.ai/api/v1/docs`
+- [MCP guide](mcp/README.md) - [Agent skill](skills/matih/SKILL.md) - [curl recipes](examples/curl/README.md)
+- [Contributing](CONTRIBUTING.md) - [Changelog](CHANGELOG.md) - [Security](SECURITY.md)
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Security
 
