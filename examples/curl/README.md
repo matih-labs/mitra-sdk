@@ -12,9 +12,9 @@ AUTH="Authorization: Bearer $MATIH_API_KEY"
 
 Errors look like `{"detail": {"category": "...", "message": "..."}}`. Add `-i` to any command to see status and headers, or `-sS --fail-with-body` to make scripts fail on HTTP errors.
 
-Credit-costing POSTs accept an `Idempotency-Key` header. Retries with the same key are not charged twice.
+`POST /ask` and `POST /predictions` accept an `Idempotency-Key` header: a retry with the same key answers once and is charged once. No other call honours it.
 
-Full machine-readable spec: `curl -s $BASE/openapi.json`. Interactive docs: `https://workspace.matih.ai/docs`.
+Full machine-readable spec: `curl -s $BASE/openapi.json`. Interactive docs: `https://workspace.matih.ai/api/v1/docs`.
 
 ## Workspaces
 
@@ -38,35 +38,39 @@ Admin actions. Run the write commands only when you mean to.
 # List members (members:read)
 curl -s -H "$AUTH" $BASE/members
 
-# Invite by email or by phone (members:manage, admin role)
+# Invite by email or by phone, exactly one of them (members:manage, admin role). 201.
+# role is viewer, user (the default) or admin; never owner.
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"email": "teammate@example.com", "role": "ROLE"}' $BASE/invitations
+  -d '{"email": "teammate@example.com", "role": "user"}' $BASE/invitations
+# A phone invitation returns join_code, join_message and join_url once, in this response only
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"phone": "+910000000000", "role": "ROLE"}' $BASE/invitations
+  -d '{"phone": "+910000000000", "role": "user"}' $BASE/invitations
 
-# List pending invitations (members:read)
+# List pending invitations (members:read, admin role)
 curl -s -H "$AUTH" $BASE/invitations
 
 # Revoke an invitation (members:manage)
 curl -s -X DELETE -H "$AUTH" $BASE/invitations/INVITATION_ID
+# -> {"revoked": "INVITATION_ID"}; 409 if it was already accepted, declined or revoked
 
 # Change a member's role (members:manage)
 curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"role": "ROLE"}' $BASE/members/MEMBER_ID
+  -d '{"role": "viewer"}' $BASE/members/MEMBER_ID
 
 # Remove a member (members:manage)
 curl -s -X DELETE -H "$AUTH" $BASE/members/MEMBER_ID
+# -> {"removed": "MEMBER_ID"}
 ```
 
-Take valid role values from `GET /members`. A 402 with category `member_cap` means the workspace has no seats left.
+`role` is `viewer`, `user` or `admin`. Owners are made and removed in the Matih app, not here. Each row of `GET /members` says whether you `can_change_role` and `can_remove` it.
 
 ## Sources and connectors
 
 ```bash
-# List sources
+# List sources -> {sources: [...], active_source_id}
 curl -s -H "$AUTH" $BASE/sources
 
-# One source, including readiness (sources:read)
+# One source, including readiness: state, phase, can_ask (sources:read)
 curl -s -H "$AUTH" $BASE/sources/SOURCE_ID
 
 # Activate a source (sources:write)
@@ -78,46 +82,62 @@ curl -s -X DELETE -H "$AUTH" $BASE/sources/SOURCE_ID
 # List connector types and the fields each needs
 curl -s -H "$AUTH" $BASE/connectors
 
-# Test a connection (needs sources:write). The config fields come from /connectors.
+# Test a connection (sources:write, admin role). The config fields come from /connectors.
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"config": {"type": "postgres", "host": "db.example.com", "port": 5432, "database": "sales", "user": "reader", "password": "REDACTED"}}' \
+  -d '{"config": {"connector_type": "postgres", "host": "db.example.com", "port": 5432, "database": "sales", "user": "reader", "password": "REDACTED"}}' \
   $BASE/sources/test
 
 # Add a source (admin role and sources:write); activate it right away.
-# 201 on success. 422 with the test result if the connection test fails (nothing is created).
+# 201 on success; its catalog is read in the background (readiness.phase: building).
+# 422, category connection, with the test result if the test fails (nothing is saved).
 curl -s -i -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"config": {"type": "postgres", "host": "db.example.com", "port": 5432, "database": "sales", "user": "reader", "password": "REDACTED"}, "activate": true}' \
+  -d '{"config": {"connector_type": "postgres", "host": "db.example.com", "port": 5432, "database": "sales", "user": "reader", "password": "REDACTED"}, "activate": true}' \
   $BASE/sources
 ```
 
-The config above is illustrative. Use the exact `type` and field names returned by `GET /connectors`.
+The config above is illustrative. Use the exact connector `type` (as `connector_type`) and field names returned by `GET /connectors`; secret fields are flagged and never returned.
+
+Connecting a source is not a Job. To get the answer back only when Ask can use the source, add `-H "Prefer: wait=60"` (up to 120): the 201 then carries `readiness.phase: ready` and `can_ask: true`, or `building` if the wait ran out. Otherwise poll:
+
+```bash
+until [ "$(curl -s -H "$AUTH" $BASE/sources/SOURCE_ID | jq -r .readiness.can_ask)" = true ]; do sleep 3; done
+```
 
 ## Files (CSV and Excel upload)
 
 ```bash
-# Upload (files:write). Optional form field on_duplicate: see /openapi.json for allowed values.
+# Upload (files:write, user role). 201. Optional form field on_duplicate: ask (default) or keep_both.
 curl -s -H "$AUTH" -F file=@sales.csv $BASE/files
-# -> {"id": "file_...", "status": "processing", ...}
+# -> {"id": "file_...", "status": "processing", "ready": false, ...}
+
+# Wait for it (up to 120 s): 201 when ready, 202 with the file still processing
+curl -si -H "$AUTH" -H "Prefer: wait=60" -F file=@sales.csv $BASE/files
 
 # List files (files:read)
 curl -s -H "$AUTH" $BASE/files
 
-# One file: status, analysis state, decision_required
+# One file: status, ready, analysis_state, decision_required
 curl -s -H "$AUTH" $BASE/files/FILE_ID
 
-# If decision_required is true, send the user's choice (files:write)
+# If decision_required is "duplicate", send the user's choice (files:write):
+# use_existing, keep_both or cancel. 409 if the file is not waiting for one.
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"decision": "DECISION"}' $BASE/files/FILE_ID/duplicate
+  -d '{"decision": "keep_both"}' $BASE/files/FILE_ID/duplicate
 
 # Delete a file (files:write). Destructive.
 curl -s -X DELETE -H "$AUTH" $BASE/files/FILE_ID
 
-# Poll in a loop
-until [ "$(curl -s -H "$AUTH" $BASE/files/FILE_ID | jq -r .status)" != "processing" ]; do sleep 3; done
-curl -s -H "$AUTH" $BASE/files/FILE_ID
+# Poll in a loop until it is ready (ready=true), or stops: needs_attention, failed,
+# or waiting on a duplicate decision
+while :; do
+  F=$(curl -s -H "$AUTH" $BASE/files/FILE_ID)
+  [ "$(echo "$F" | jq -r '.ready or (.status == "needs_attention") or (.status == "failed") or (.decision_required != null)')" = true ] && break
+  sleep 3
+done
+echo "$F" | jq '{status, ready, decision_required, error_message}'
 ```
 
-Once the file is ready, it shows up in `GET /sources`.
+The type comes from the file name (csv, tsv, txt, parquet, json, jsonl, xlsx and the other formats the app takes). A file over the size limit is 413, an unsupported type 415. Once the file is ready, its tables can be asked about.
 
 ## Ask
 
@@ -144,6 +164,10 @@ curl -s -H "$AUTH" -H 'Content-Type: application/json' \
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"question": "Total sales last month", "language": "ta-IN"}' $BASE/ask
 
+# Answer in the background: 202 with a Job of kind ask (see Sync or background below)
+curl -s -H "$AUTH" -H 'Content-Type: application/json' -H 'Prefer: respond-async' \
+  -d '{"question": "Top customers this year"}' $BASE/ask
+
 # Show only the status, answer and conversation id
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"question": "How many orders yesterday?"}' $BASE/ask \
@@ -152,7 +176,7 @@ curl -s -H "$AUTH" -H 'Content-Type: application/json' \
 
 ### Streaming (server-sent events)
 
-Events: `started`, `progress`, `answer`, `error`.
+Events: `started`, any number of `progress` (`{stage, message, status}`), then one `answer` (the Answer) or `error` (`{category, message}`). A 402 is returned before the stream opens.
 
 ```bash
 curl -N -H "$AUTH" -H 'Content-Type: application/json' \
@@ -166,7 +190,7 @@ curl -N -H "$AUTH" -H 'Content-Type: application/json' \
 ### Audio (voice note)
 
 ```bash
-curl -s -H "$AUTH" -H "Idempotency-Key: $(uuidgen)" \
+curl -s -H "$AUTH" \
   -F file=@question.ogg \
   -F source_id=SOURCE_ID \
   -F conversation_id=CONVERSATION_ID \
@@ -174,7 +198,7 @@ curl -s -H "$AUTH" -H "Idempotency-Key: $(uuidgen)" \
   $BASE/ask/audio
 ```
 
-`source_id`, `conversation_id` and `language` are optional (scope `ask`). The speech language is detected automatically. The response is an Answer plus `heard`, for example `{"transcript": "...", "language": "hi-IN"}`:
+`source_id`, `conversation_id` and `language` are optional (scope `ask`); `language` names the language spoken and skips detection. The recording is any common audio format, 5 MB at most, and is not stored. The call does not honour `Idempotency-Key`. The response is an Answer plus `heard`, for example `{"transcript": "...", "language": "hi-IN"}`:
 
 ```bash
 curl -s -H "$AUTH" -F file=@question.ogg $BASE/ask/audio | jq '{heard, status, answer}'
@@ -183,26 +207,30 @@ curl -s -H "$AUTH" -F file=@question.ogg $BASE/ask/audio | jq '{heard, status, a
 ### Conversations
 
 ```bash
+# Your conversations, most recent first (including those started in Matih's apps)
 curl -s -H "$AUTH" $BASE/conversations
+# One conversation with its messages, oldest first
 curl -s -H "$AUTH" $BASE/conversations/CONVERSATION_ID
 ```
 
 ## Gems
 
 ```bash
-# List gems for a source
+# The Gem feed of a source (the active one if source_id is left out) -> {state, gems, generated_at}
 curl -s -H "$AUTH" "$BASE/gems?source_id=SOURCE_ID"
 
 # Read one gem
-curl -s -H "$AUTH" $BASE/gems/GEM_ID
+curl -s -H "$AUTH" "$BASE/gems/GEM_ID?source_id=SOURCE_ID"
 
-# Download a gem's image (with auth)
-curl -s -H "$AUTH" -o gem.png $BASE/gems/GEM_ID/image.png
+# Download a gem's image (with auth); 404 when it has nothing worth drawing
+curl -s -H "$AUTH" -o gem.png "$BASE/gems/GEM_ID/image.png?source_id=SOURCE_ID"
 
-# Generate gems (202 with a Job)
+# Generate gems (gems:generate): 202 with a Job. The body and source_id are optional.
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: $(uuidgen)" \
   -d '{"source_id": "SOURCE_ID"}' $BASE/gems/generate
+
+# Or wait up to 30 s: 200 with the finished Job (result: source_id, state, gem_count), else 202
+curl -si -X POST -H "$AUTH" "$BASE/gems/generate?wait=30"
 ```
 
 ## Dashboards
@@ -214,11 +242,11 @@ curl -s -H "$AUTH" $BASE/dashboards
 # Read one
 curl -s -H "$AUTH" $BASE/dashboards/DASHBOARD_ID
 
-# Render as an image (202 with a Job; result has image_url, width, height)
-curl -s -X POST -H "$AUTH" -H "Idempotency-Key: $(uuidgen)" \
-  $BASE/dashboards/DASHBOARD_ID/image
+# Render as an image (202 with a Job; result has image_url, width, height).
+# Optional body {"width": 400-3200}, default 1600. Add ?wait=20 to wait for the finished Job.
+curl -s -X POST -H "$AUTH" "$BASE/dashboards/DASHBOARD_ID/image?wait=20"
 
-# Download the PNG. Redirects to a fresh image when cached, else returns 202 with a Job.
+# Download the PNG. 303 to the image when one was drawn recently, else 202 with a Job.
 curl -sL -H "$AUTH" -o dashboard.png $BASE/dashboards/DASHBOARD_ID/image.png
 ```
 
@@ -227,14 +255,14 @@ If the last call wrote a small JSON file instead of a PNG, a render job was star
 ## Predictions
 
 ```bash
-# Start (202 with a Job; can take up to 30 minutes)
+# Start (predict scope): 202 with a Job. Takes minutes; the server gives up after 30.
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{"question": "Forecast monthly revenue for the next 6 months", "source_id": "SOURCE_ID"}' \
   $BASE/predictions
 ```
 
-The result is `{answer, attachments:[{type: forecast|table|model|what_if, ...}], image_url?}`.
+The finished Job's `result` is `{conversation_id, answer}`: `answer` is a string, and `conversation_id` continues the prediction conversation (send it back as `conversation_id` to `POST /predictions`).
 
 ## Sync or background (Prefer)
 
@@ -242,7 +270,7 @@ Long calls take standard `Prefer` headers. `Preference-Applied` in the response 
 server honoured.
 
 ```bash
-# Wait up to 60 s for a forecast: 201/200 if finished in time, otherwise 202 with a Job
+# Wait up to 60 s for a forecast: 200 with the finished Job, otherwise 202 with the Job so far
 curl -si https://workspace.matih.ai/api/v1/predictions \
   -H "Authorization: Bearer $MATIH_API_KEY" -H "Content-Type: application/json" \
   -H "Prefer: wait=60" -H "Idempotency-Key: $(uuidgen)" \
@@ -254,8 +282,10 @@ curl -s https://workspace.matih.ai/api/v1/ask \
   -H "Prefer: respond-async" -d '{"question": "Top customers this year"}'
 ```
 
-`wait` also works as `?wait=N` on `POST /gems/generate`, `/predictions`,
-`/dashboards/{id}/image` (up to 60), `POST /sources` (up to 120) and `POST /files`.
+`wait` also works as `?wait=N` on `POST /gems/generate`, `/predictions` and
+`/dashboards/{id}/image` (up to 60; a larger `?wait=` is a 422, a larger header is capped).
+On `POST /sources` and `POST /files` it goes up to 120, but those return the source or the file,
+not a Job: poll `GET /sources/{id}` or `GET /files/{id}`.
 
 ## Jobs
 
@@ -296,10 +326,10 @@ done
 
 ## Images
 
-`image_url` values are short-lived signed URLs (15 minutes) and need no auth header:
+`image_url` values are public, unguessable URLs that expire after 15 minutes and need no auth header:
 
 ```bash
-URL=$(curl -s -H "$AUTH" $BASE/gems/GEM_ID | jq -r .image_url)
+URL=$(curl -s -H "$AUTH" "$BASE/gems/GEM_ID?source_id=SOURCE_ID" | jq -r .image_url)
 curl -s -o image.png "$URL"
 ```
 
@@ -310,21 +340,22 @@ If it has expired, fetch the gem or job again for a new URL, or use the authenti
 Events: `gems.ready`, `prediction.completed`, `job.completed`, `dashboard_image.ready`. Needs `webhooks:manage`.
 
 ```bash
-# Create. The signing secret (whsec_...) is returned ONCE; store it now.
+# Create (admin role). 201. At most 20 per workspace; the URL must be a public https one.
+# The signing secret (whsec_...) is returned ONCE; store it now.
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com/hooks/matih", "events": ["job.completed", "prediction.completed"]}' \
   $BASE/webhooks
 
-# List
+# List -> {webhooks: [...]}; secrets are never listed
 curl -s -H "$AUTH" $BASE/webhooks
 
-# Send a test delivery
+# Send a ping now and see how it went (delivered, status, error)
 curl -s -X POST -H "$AUTH" $BASE/webhooks/WEBHOOK_ID/test
 
-# Recent deliveries and their outcomes
+# The last 50 deliveries and their outcomes (kept 30 days)
 curl -s -H "$AUTH" $BASE/webhooks/WEBHOOK_ID/deliveries
 
-# Delete
+# Delete (204)
 curl -s -X DELETE -H "$AUTH" $BASE/webhooks/WEBHOOK_ID
 ```
 
@@ -338,9 +369,9 @@ Matih-Event: <event name, for example job.completed>
 Matih-Delivery: <delivery id>
 ```
 
-Use `Matih-Delivery` to deduplicate repeated deliveries.
+The body's `id` is the event id, the same on every retry: use it to ignore duplicates. `Matih-Delivery` identifies the delivery to this endpoint. Answer with any 2xx within 10 seconds; a redirect counts as a failure.
 
-The signed string is `"<t>.<raw body>"`, HMAC-SHA256 with your webhook secret.
+The signed string is `"<t>.<raw body>"`, HMAC-SHA256 keyed with the whole `whsec_...` secret string.
 
 Shell check, with the raw body saved to `body.json`:
 
@@ -360,9 +391,10 @@ In your receiver, also compare in constant time, use the raw bytes of the body (
 ```bash
 curl -s https://workspace.matih.ai/.well-known/oauth-authorization-server | jq .
 curl -s https://workspace.matih.ai/.well-known/oauth-protected-resource | jq .
+curl -s https://workspace.matih.ai/.well-known/oauth-protected-resource/api/v1/mcp | jq .
 ```
 
-OAuth 2.1 with authorization code and PKCE, plus dynamic client registration. Access tokens start with `mto_`; refresh tokens (`mtr_`) rotate. Use the access token exactly like an API key:
+OAuth 2.1 with authorization code and PKCE (`S256`), plus dynamic client registration (`POST /api/v1/oauth/register`). Access tokens start with `mto_` and last an hour; refresh tokens (`mtr_`) last 30 days and rotate: each refresh returns a new one and the old one stops working. Use the access token exactly like an API key:
 
 ```bash
 curl -s -H "Authorization: Bearer mto_..." -H "X-Matih-Workspace: WORKSPACE_ID" $BASE/sources
@@ -373,8 +405,8 @@ curl -s -H "Authorization: Bearer mto_..." -H "X-Matih-Workspace: WORKSPACE_ID" 
 ```bash
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}' \
   $BASE/mcp
 ```
 
-For real use, connect with an MCP client. See `../../mcp/README.md`.
+The server is stateless: every POST is a complete exchange. For real use, connect with an MCP client. See `../../mcp/README.md`.
