@@ -268,7 +268,7 @@ head -c 200 dashboard.png   # if this is JSON, a render job was started: poll it
 
 ## Notify when ready
 
-For renders you start and walk away from, register a `dashboard_image.ready` [webhook](webhooks.md). Its `data` holds `job_id`, `dashboard_id` and `image_url`.
+For renders you start and walk away from, register a `dashboard_image.ready` [webhook](webhooks.md). Its `data` is the finished Job: `job_id`, `kind`, `state`, `result` (`image_url`, `width`, `height`) and `links`. It carries no `dashboard_id`, so keep your own map of job id to dashboard.
 
 ## Tips
 

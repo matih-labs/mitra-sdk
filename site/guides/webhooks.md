@@ -13,13 +13,13 @@ A webhook made with an integration's API key or OAuth token belongs to that inte
 
 | `type` | Sent when | `data` |
 |---|---|---|
-| `gems.ready` | Gems finished generating for a source | `source_id`, `gem_count` |
-| `prediction.completed` | a prediction finished | `job_id`, `conversation_id`, `state` |
-| `job.completed` | any `202` job reached a final state | `job_id`, `kind`, `state` |
-| `dashboard_image.ready` | a dashboard image is rendered | `job_id`, `dashboard_id`, `image_url` |
+| `job.completed` | any job reached a final state (`succeeded`, `failed`, `cancelled`) | `job_id`, `kind`, `state`, `result`, `error`, `links` |
+| `gems.ready` | Gems finished generating for a source | the same, `kind` is `gems`, `result` is `{source_id, state, gem_count}` |
+| `prediction.completed` | a prediction succeeded | the same, `kind` is `prediction`, `result` holds `conversation_id` and a shortened `answer` |
+| `dashboard_image.ready` | a dashboard image was drawn | the same, `kind` is `dashboard_image`, `result` is `{image_url, width, height}` |
 | `ping` | you called `POST /api/v1/webhooks/{id}/test` | `message` |
 
-`data` holds **ids and summary fields only, never rows of your data**, plus `links`: paths on the API to fetch the details, for example `"links": {"job": "/api/v1/jobs/j_123"}`. Take the id from the event, then call the API (with your key) for the content.
+The kind's own event is sent only when the job **succeeded**; `job.completed` is sent for every final state. The `data` of a job event is the Job (see [Jobs](../concepts/jobs.md)) cut down to ids and summary fields: scalars, short lists and one level of nested values, strings shortened to 500 characters, and **never rows of your data**. `links` gives paths on the API to fetch the details, for example `"links": {"job": "/api/v1/jobs/3f9c...", "conversation": "/api/v1/conversations/5c1d..."}`. Take the id from the event, then call the API (with your key) for the full content, such as the whole prediction `answer`.
 
 ## Create a webhook
 
@@ -133,7 +133,7 @@ Matih-Event: gems.ready
 Matih-Delivery: whd_0b7e5d2c9a14f3680d21
 Matih-Signature: t=1761900000,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
 
-{"created_at":"2026-10-31T11:20:00+00:00","data":{"gem_count":6,"source_id":"c_8f2"},"id":"evt_4f9c1a7b2d03e85a6c11","type":"gems.ready","workspace_id":"w_123"}
+{"created_at":"2026-10-31T11:20:00+00:00","data":{"error":null,"job_id":"9b1d4c0e7a2f4c1e8d3b5a6f70e1c2d3","kind":"gems","links":{"job":"/api/v1/jobs/9b1d4c0e7a2f4c1e8d3b5a6f70e1c2d3"},"result":{"gem_count":6,"source_id":"c_8f2","state":"ready"},"state":"succeeded"},"id":"evt_4f9c1a7b2d03e85a6c11","type":"gems.ready","workspace_id":"w_123"}
 ```
 
 - `id` is the event's id: the same for every webhook the event goes to and for every retry. **Use it to ignore duplicates.**

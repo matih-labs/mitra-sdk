@@ -291,7 +291,7 @@ Every Gem has an `image_url`: a signed, short-lived URL (15 minutes, no auth hea
     console.log(job.state);
     ```
 
-Only one generation can run per source; a `409` with category `busy` means one is already in progress. Rather than polling, you can register a `gems.ready` [webhook](webhooks.md) and refresh your feed when it fires (its `data` carries `source_id` and `gem_count`).
+Rather than polling, you can register a `gems.ready` [webhook](webhooks.md) and refresh your feed when it fires (its `data.result` carries `source_id` and `gem_count`).
 
 ## A daily digest in 20 lines
 
