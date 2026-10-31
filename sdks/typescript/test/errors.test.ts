@@ -49,12 +49,12 @@ describe("errorFromResponse", () => {
   });
 
   it("reads Retry-After seconds on 429", () => {
-    const err = errorFromResponse(429, new Headers({ "retry-after": "7" }), JSON.stringify(detail("rate_limit", "slow")));
+    const err = errorFromResponse(429, new Headers({ "retry-after": "7" }), JSON.stringify(detail("rate_limited", "slow")));
     expect((err as RateLimitError).retryAfter).toBe(7);
   });
 
   it("leaves retryAfter undefined when the header is absent", () => {
-    const err = errorFromResponse(429, new Headers(), JSON.stringify(detail("rate_limit", "slow")));
+    const err = errorFromResponse(429, new Headers(), JSON.stringify(detail("rate_limited", "slow")));
     expect((err as RateLimitError).retryAfter).toBeUndefined();
   });
 
@@ -120,7 +120,7 @@ describe("errors from the client", () => {
   });
 
   it("throws RateLimitError after retries are exhausted", async () => {
-    const m = sequence(jsonResponse(detail("rate_limit", "slow"), 429, { "retry-after": "0" }));
+    const m = sequence(jsonResponse(detail("rate_limited", "slow"), 429, { "retry-after": "0" }));
     const err = await makeClient(m.fetch, { maxRetries: 1 }).sources.list().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(RateLimitError);
     expect((err as RateLimitError).retryAfter).toBe(0);

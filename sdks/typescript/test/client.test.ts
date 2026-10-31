@@ -217,7 +217,7 @@ describe("retries", () => {
 
   it("retries 429 honouring Retry-After", async () => {
     const m = sequence(
-      jsonResponse({ detail: { category: "rate_limit", message: "slow down" } }, 429, { "retry-after": "0" }),
+      jsonResponse({ detail: { category: "rate_limited", message: "slow down" } }, 429, { "retry-after": "0" }),
       jsonResponse({ sources: [] }),
     );
     await makeClient(m.fetch).sources.list();
@@ -226,7 +226,7 @@ describe("retries", () => {
 
   it("retries 429 even on an unkeyed POST", async () => {
     const m = sequence(
-      jsonResponse({ detail: { category: "rate_limit", message: "slow down" } }, 429, { "retry-after": "0" }),
+      jsonResponse({ detail: { category: "rate_limited", message: "slow down" } }, 429, { "retry-after": "0" }),
       jsonResponse({ ok: true }),
     );
     await makeClient(m.fetch).sources.test({ type: "csv" });
@@ -235,7 +235,7 @@ describe("retries", () => {
 
   it("surfaces a very long Retry-After instead of sleeping", async () => {
     const m = sequence(
-      jsonResponse({ detail: { category: "rate_limit", message: "slow down" } }, 429, { "retry-after": "120" }),
+      jsonResponse({ detail: { category: "rate_limited", message: "slow down" } }, 429, { "retry-after": "120" }),
     );
     const err = await makeClient(m.fetch).sources.list().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(RateLimitError);

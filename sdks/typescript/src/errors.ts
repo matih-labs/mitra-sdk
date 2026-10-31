@@ -152,7 +152,7 @@ function defaultCategory(status: number): string {
     case 409:
       return "conflict";
     case 429:
-      return "rate_limit";
+      return "rate_limited";
     default:
       return status >= 500 ? "server" : "unknown";
   }
