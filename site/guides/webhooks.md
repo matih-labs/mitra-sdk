@@ -3,7 +3,7 @@
 Long work (generating Gems, forecasts, dashboard images) finishes minutes after you ask for it. Instead of polling [`GET /api/v1/jobs/{id}`](../concepts/jobs.md), register an HTTPS URL and Matih sends a signed `POST` when something is ready.
 
 !!! info "You need"
-    - Product: **Webhooks** (scope `webhooks:manage`), with **Allow changes** on to create and delete.
+    - Product: **Webhooks** (scope `webhooks:manage`) switched on for the key. It has no separate *Allow changes* switch: the one scope lists, creates, tests and deletes.
     - A workspace **admin**: managing webhooks needs the admin role whatever the key's scopes say.
     - A public `https` URL that your server answers.
 
@@ -142,7 +142,7 @@ Matih-Signature: t=1761900000,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56f
 
 ## Verify the signature
 
-`Matih-Signature` is `t=<unix seconds>,v1=<hex HMAC-SHA256>`. The HMAC is over the string `"<t>.<raw request body>"`, keyed with the endpoint's secret.
+`Matih-Signature` is `t=<unix seconds>,v1=<hex HMAC-SHA256>`. The HMAC is over the string `"<t>.<raw request body>"`, keyed with the endpoint's secret, the whole `whsec_...` string including the prefix.
 
 !!! warning "Three rules"
     1. Verify against the **raw bytes** of the body, before any JSON parsing. A re-serialised body will not match.
