@@ -6,12 +6,12 @@
 //   node example.mjs --skip-predict
 //   node example.mjs --background     (predict without Prefer: wait, start a job and poll it)
 //   node example.mjs --upload ./sales.csv
-//   node example.mjs --invite teammate@example.com --role ROLE   (admin action, never runs by default)
+//   node example.mjs --invite teammate@example.com --role user   (admin action, never runs by default)
 //
 // Environment:
 //   MATIH_API_KEY    required. Create one under Settings › API & MCP in Matih.
 //   MATIH_BASE_URL   optional. Default https://workspace.matih.ai ("/api/v1" is appended).
-//   MATIH_ON_DUPLICATE  optional. Passed as the on_duplicate form field of the file upload.
+//   MATIH_ON_DUPLICATE  optional. The on_duplicate form field of the file upload: ask (default) or keep_both.
 //
 // Teaching example. Do not commit your API key.
 
@@ -49,7 +49,7 @@ function retryAfterSeconds(value) {
 }
 
 // One request, returning { status, data }. On a 429 it honours Retry-After once and
-// retries with the same Idempotency-Key, so a credit-costing call is never charged twice.
+// retries with the same Idempotency-Key (the server honours it on /ask and /predictions).
 // prefer is the value of an optional RFC 7240 Prefer header: "wait=30" or "respond-async".
 async function send(method, path, { json, form, idempotencyKey, prefer } = {}, retried = false) {
   const headers = { Authorization: `Bearer ${API_KEY}`, Accept: "application/json" };
@@ -128,7 +128,7 @@ function requireSucceeded(job) {
 // ---------------------------------------------------------------------------
 // (1) Ask a question
 // ---------------------------------------------------------------------------
-// Costs credits, so it carries an Idempotency-Key. Use a fresh key for each new
+// Costs credits, so it carries an Idempotency-Key (honoured on /ask and /predictions). Use a fresh key for each new
 // question and reuse the same key only when retrying that exact request.
 // The answer has a conversation_id: send it back as conversation_id in the next
 // POST /ask to ask a follow-up in the same conversation.
@@ -180,9 +180,10 @@ async function askAsync(question) {
 // Sync with a bounded wait: "Prefer: wait=N" (N up to 60 seconds)
 // ---------------------------------------------------------------------------
 // Works on POST /gems/generate, /predictions and /dashboards/{id}/image. The server
-// answers 200 or 201 when the work finished within N seconds, otherwise 202 with a Job.
+// answers 200 with the finished Job when the work finished within N seconds, otherwise
+// 202 with the Job as it stands.
 // Either way this returns the result object; on 202 it falls back to polling the job.
-// If a finished answer carries a Job (it has a "state"), its result field is used.
+// A finished answer is a Job (it has a "state"), and its result field is used.
 const WAIT_SECONDS = 30;
 
 async function runWithWait(path, options, pollOptions) {
@@ -200,8 +201,8 @@ async function runWithWait(path, options, pollOptions) {
 // (3) Dashboard image job
 // ---------------------------------------------------------------------------
 // Sync-with-fallback: wait=N, and if the job is still running, poll GET /jobs/{id}
-// with a growing delay. image_url is a signed URL valid for about 15 minutes that
-// needs no Authorization header.
+// with a growing delay. image_url is a public, unguessable URL that expires after
+// 15 minutes and needs no Authorization header.
 async function dashboardImage() {
   const data = await request("GET", "/dashboards");
   if (data.dashboards.length === 0) {
@@ -221,12 +222,12 @@ async function dashboardImage() {
 // ---------------------------------------------------------------------------
 // (4) Predict
 // ---------------------------------------------------------------------------
-// A prediction can run for up to 30 minutes. Poll every 5 to 10 seconds.
-// Webhooks (prediction.completed) avoid polling.
+// A prediction usually takes one to five minutes; the server gives up after 30.
+// Poll every 5 to 10 seconds. Webhooks (prediction.completed) avoid polling.
+// A finished prediction's result is {conversation_id, answer}; answer is a string.
 function printPrediction(result) {
   console.log(`answer: ${result.answer}`);
-  for (const attachment of result.attachments || []) console.log(`  attachment: ${attachment.type}`);
-  if (result.image_url) console.log(`image_url: ${result.image_url}`);
+  console.log(`conversation_id: ${result.conversation_id} (pass it to POST /predictions to continue)`);
 }
 
 const PREDICT_POLL = { firstDelayMs: 5000, maxDelayMs: 10000, timeoutMs: 31 * 60_000 };
@@ -259,7 +260,7 @@ async function predictBackground(question) {
 async function listSources() {
   const data = await request("GET", "/sources");
   for (const s of data.sources) {
-    console.log(`  ${s.id}  ${s.name}  type=${s.type}  status=${s.status}  active=${s.active}`);
+    console.log(`  ${s.id}  ${s.name}  connector_type=${s.connector_type}  state=${s.state}  active=${s.is_active}`);
   }
   if (data.sources.length === 0) console.log("no sources yet");
 }
@@ -267,8 +268,8 @@ async function listSources() {
 // ---------------------------------------------------------------------------
 // (6) Upload a CSV or Excel file (multipart, field name "file")
 // ---------------------------------------------------------------------------
-// Needs the files:write scope. The optional on_duplicate field says what to do
-// when the same file was uploaded before.
+// Needs the files:write scope. The optional on_duplicate field is "ask" (the default:
+// an identical file waits for a decision) or "keep_both".
 function contentTypeFor(path) {
   switch (extname(path).toLowerCase()) {
     case ".csv":
@@ -288,22 +289,30 @@ async function uploadFile(path) {
   form.append("file", new Blob([bytes], { type: contentTypeFor(path) }), basename(path));
   if (process.env.MATIH_ON_DUPLICATE) form.append("on_duplicate", process.env.MATIH_ON_DUPLICATE);
 
-  let file = await request("POST", "/files", { form });
-  console.log(`uploaded: ${file.id} status=${file.status}`);
-  // Processing is asynchronous. Needs the files:read scope to follow it.
-  for (let i = 0; i < 40 && file.status === "processing"; i++) {
+  // The file is a File, not a Job. Without Prefer it comes back at once (201) with
+  // status "processing". "Prefer: wait=N" (up to 120) holds the request until it is
+  // ready; if processing is still running after N seconds the answer is 202.
+  let file = await request("POST", "/files", { form, prefer: "wait=30" });
+  console.log(`uploaded: ${file.id} status=${file.status} ready=${file.ready}`);
+  // Follow it with GET /files/{id} (needs files:read) until Ask can use it, it needs
+  // attention or failed, or it waits for a duplicate decision.
+  const settled = (f) =>
+    f.ready || f.status === "needs_attention" || f.status === "failed" || f.decision_required;
+  for (let i = 0; i < 40 && !settled(file); i++) {
     await sleep(3000);
     file = await request("GET", `/files/${encodeURIComponent(file.id)}`);
-    console.log(`  status=${file.status}`);
+    console.log(`  status=${file.status} ready=${file.ready}`);
   }
   console.log(JSON.stringify(file, null, 2));
-  if (file.decision_required) console.log("the file needs a decision (duplicate handling); see POST /files/{id}/duplicate");
+  if (file.decision_required) {
+    console.log(`the file is a duplicate of ${file.duplicate_of} and waits for a decision (${file.decision_options.join(", ")}); see POST /files/{id}/duplicate`);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // (7) Invite a member (admin action, members:manage)
 // ---------------------------------------------------------------------------
-// Only runs when you pass --invite. Valid role values come from GET /members.
+// Only runs when you pass --invite. role is viewer, user or admin (never owner).
 async function inviteMember(target, role) {
   const body = target.includes("@") ? { email: target, role } : { phone: target, role };
   const invitation = await request("POST", "/invitations", { json: body });
@@ -330,9 +339,9 @@ async function main() {
   };
   const uploadPath = flag("--upload");
   const inviteTarget = flag("--invite");
-  const inviteRole = flag("--role");
-  if (inviteTarget && !inviteRole) {
-    console.error("--invite needs --role ROLE (valid values come from GET /members)");
+  const inviteRole = flag("--role") || "user";
+  if (inviteTarget && !["viewer", "user", "admin"].includes(inviteRole)) {
+    console.error("--role must be viewer, user or admin");
     process.exit(2);
   }
 
