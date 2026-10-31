@@ -1,0 +1,97 @@
+name: sync-spec
+
+on:
+  repository_dispatch:
+    types: [spec-updated]
+  workflow_dispatch:
+    inputs:
+      spec_url:
+        description: URL of the OpenAPI document to copy
+        required: false
+        default: https://workspace.matih.ai/api/v1/openapi.json
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-spec
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve inputs
+        id: in
+        env:
+          DISPATCH_URL: ${{ github.event.client_payload.spec_url }}
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          MANUAL_URL: ${{ github.event.inputs.spec_url }}
+        run: |
+          url="${DISPATCH_URL:-${MANUAL_URL:-https://workspace.matih.ai/api/v1/openapi.json}}"
+          case "$url" in
+            https://*) ;;
+            *) echo "spec_url must be https" >&2; exit 1 ;;
+          esac
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "version=${DISPATCH_VERSION:-manual}" >> "$GITHUB_OUTPUT"
+
+      - name: Download spec
+        env:
+          SPEC_URL: ${{ steps.in.outputs.url }}
+        run: |
+          mkdir -p openapi
+          curl -fsSL --retry 3 "$SPEC_URL" -o openapi/openapi.json.new
+          python3 - <<'PY'
+          import json
+          with open("openapi/openapi.json.new") as f:
+              spec = json.load(f)
+          assert str(spec.get("openapi", "")).startswith("3."), "not an OpenAPI 3 document"
+          with open("openapi/openapi.json", "w") as f:
+              json.dump(spec, f, indent=2, sort_keys=True)
+              f.write("\n")
+          PY
+          rm -f openapi/openapi.json.new
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+
+      - name: Regenerate TypeScript types
+        working-directory: sdks/typescript
+        run: |
+          npm install --no-audit --no-fund
+          npm run generate
+
+      # peter-evans/create-pull-request is not pinned to a commit SHA anywhere in the
+      # organisation, so the branch and the pull request are made with git and gh.
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.in.outputs.version }}
+          SPEC_URL: ${{ steps.in.outputs.url }}
+        run: |
+          git add openapi/openapi.json
+          if git diff --cached --quiet; then
+            echo "The spec is unchanged; nothing to open."
+            exit 0
+          fi
+          branch="automation/spec-${VERSION}"
+          title="chore(openapi): sync spec ${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git commit -m "$title"
+          git push --force origin "$branch"
+          body="Automated copy of the Matih API OpenAPI spec (version \`${VERSION}\`) from \`${SPEC_URL}\`.
+
+          Review the diff, check that the SDK tests still pass, and add a CHANGELOG entry
+          for any user-visible change."
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            gh pr edit "$branch" --title "$title" --body "$body"
+          else
+            gh pr create --head "$branch" --base "${GITHUB_REF_NAME}" --title "$title" --body "$body"
+          fi

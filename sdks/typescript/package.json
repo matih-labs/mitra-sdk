@@ -1,0 +1,50 @@
+{
+  "name": "@matihlabs/mitra",
+  "version": "0.1.0",
+  "description": "TypeScript client for the Mitra public API: ask questions of your data, generate Gems, render dashboards, run predictions.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matih-labs/mitra-sdk.git",
+    "directory": "sdks/typescript"
+  },
+  "homepage": "https://github.com/matih-labs/mitra-sdk/tree/main/sdks/typescript",
+  "bugs": {
+    "url": "https://github.com/matih-labs/mitra-sdk/issues"
+  },
+  "keywords": ["mitra", "matih", "analytics", "sdk", "api"],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "openapi-typescript": "^7.4.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

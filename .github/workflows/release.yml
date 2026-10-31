@@ -1,0 +1,75 @@
+name: release
+
+# Publishing happens only when a tag is pushed. One tag releases both packages, which
+# share a version:
+#   vX.Y.Z  -> PyPI  (trusted publishing, environment "pypi", no stored token)
+#           -> npm   (with provenance; needs the NPM_TOKEN secret)
+# Each job refuses to publish when the tag does not match its package version.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish-python:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No actions/setup-python or pypa/gh-action-pypi-publish is pinned to a commit SHA
+      # (the organisation refuses anything else), so uv builds and publishes.
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: Check the tag matches the package version
+        working-directory: sdks/python
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(uv run --no-project python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "$tag" = "$ver" || { echo "tag $tag != pyproject version $ver" >&2; exit 1; }
+      - name: Build
+        working-directory: sdks/python
+        run: uv build --out-dir dist
+      - name: Publish to PyPI (trusted publishing)
+        working-directory: sdks/python
+        run: uv publish --trusted-publishing always dist/*
+
+  publish-typescript:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: sdks/typescript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Check the tag matches the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(node -p "require('./package.json').version")"
+          test "$tag" = "$ver" || { echo "tag $tag != package.json version $ver" >&2; exit 1; }
+      - name: Install
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+      - run: npm run generate
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
