@@ -15,14 +15,36 @@ from . import _core
 from .errors import JobFailedError, JobTimeoutError, MitraError
 from .models import (
     Answer,
+    ConnectorList,
+    Conversation,
+    ConversationList,
     Dashboard,
     DashboardList,
+    DuplicateChoice,
     File,
+    FileList,
     GemList,
+    GivableRole,
+    Invitation,
+    InvitationList,
+    InvitationRevoked,
     Job,
+    Member,
+    MemberList,
+    MemberRemoved,
+    OnDuplicate,
+    Source,
+    SourceCreated,
+    SourceDeleted,
     SourceList,
+    SourceTest,
     StreamEvent,
     Webhook,
+    WebhookDeliveryList,
+    WebhookEvent,
+    WebhookList,
+    WebhookTestResult,
+    WorkspaceChosen,
     WorkspaceList,
 )
 from .models import Gem as GemModel
@@ -63,13 +85,14 @@ def _audio_fields(
     return {k: v for k, v in fields.items() if v}
 
 
-# (cap on the Prefer wait value the server honours, default total wait in seconds)
+# kind -> (cap on the Prefer wait value the server honours, default total wait in seconds).
+# Jobs (gems, dashboard, prediction) honour wait up to 60; sources and files up to 120.
 _WAIT_LIMITS = {
     "gems": (60, 600.0),
     "dashboard": (60, 300.0),
     "prediction": (60, DEFAULT_JOB_TIMEOUT),
     "source": (120, 300.0),
-    "file": (60, 300.0),
+    "file": (120, 300.0),
 }
 
 
@@ -88,13 +111,17 @@ def timeout_for(prefer: str | None) -> float:
     return 0.0
 
 
+# (first, longest) seconds between polls of a source or file that is still being read
+_RESOURCE_POLL = (2.0, 10.0)
+
+
 def _job_opts(opts: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in opts.items() if k in ("workspace_id", "language")}
 
 
 def _ask_result(status: int, payload: Any) -> Answer | Job:
-    """``ask`` returns an Answer, or a Job when ``Prefer: respond-async`` was honoured."""
-    if status == 202 or (isinstance(payload, dict) and "state" in payload and "kind" in payload):
+    """``ask`` returns an Answer (200), or a Job (202) when ``Prefer: respond-async`` was honoured."""
+    if status == 202:
         return Job.model_validate(payload)
     return Answer.model_validate(payload)
 
@@ -127,23 +154,102 @@ class _Resources:
 
 class _Workspaces(_Resources):
     def list(self, **opts: _Opts) -> Any:
+        """The workspaces you belong to, which one is ``current``, and open invitations for you."""
         return self._c.request("GET", "/workspaces", parse=WorkspaceList.model_validate, **opts)
 
     def use(self, workspace_id: str, **opts: _Opts) -> Any:
-        """Set the default workspace (``PUT /me/workspace``). OAuth tokens only."""
-        return self._c.request("PUT", "/me/workspace", json_body={"workspace_id": workspace_id}, **opts)
+        """Set the default workspace for the credential (``PUT /me/workspace``).
+
+        OAuth tokens only: an API key is pinned to one workspace. Per call you can also pass
+        ``workspace_id=`` (sent as ``X-Matih-Workspace``)."""
+        return self._c.request(
+            "PUT", "/me/workspace", json_body={"workspace_id": workspace_id},
+            parse=WorkspaceChosen.model_validate, **opts,
+        )
+
+
+class _Members(_Resources):
+    """Needs ``members:read`` (list) or ``members:manage`` (change role, remove)."""
+
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/members", parse=MemberList.model_validate, **opts)
+
+    def update(self, member_id: str, role: GivableRole, **opts: _Opts) -> Any:
+        """Make a member ``admin``, ``user`` or ``viewer``. Nobody can be made ``owner`` here."""
+        return self._c.request(
+            "PATCH", f"/members/{member_id}", json_body={"role": role},
+            parse=Member.model_validate, **opts,
+        )
+
+    def remove(self, member_id: str, **opts: _Opts) -> Any:
+        return self._c.request(
+            "DELETE", f"/members/{member_id}", parse=MemberRemoved.model_validate, **opts
+        )
+
+
+class _Invitations(_Resources):
+    def create(
+        self,
+        role: GivableRole = "user",
+        *,
+        email: str | None = None,
+        phone: str | None = None,
+        whatsapp_only: bool = False,
+        **opts: _Opts,
+    ) -> Any:
+        """Invite by ``email`` or ``phone`` (exactly one; ``members:manage``).
+
+        ``role`` is ``admin``, ``user`` (default) or ``viewer``, never ``owner``. A phone
+        invitation goes out on WhatsApp; if it cannot be delivered the result carries a
+        ``join_code`` (shown once). ``whatsapp_only=True`` lets the person use the workspace on
+        WhatsApp only."""
+        if bool(email) == bool(phone):
+            raise ValueError("pass exactly one of email= or phone=")
+        body: dict[str, Any] = {"role": role, **({"email": email} if email else {"phone": phone})}
+        if whatsapp_only:
+            body["whatsapp_only"] = True
+        return self._c.request(
+            "POST", "/invitations", json_body=body, parse=Invitation.model_validate, **opts
+        )
+
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/invitations", parse=InvitationList.model_validate, **opts)
+
+    def revoke(self, invitation_id: str, **opts: _Opts) -> Any:
+        """Withdraw an open invitation. One already accepted, declined or revoked answers 409."""
+        return self._c.request(
+            "DELETE", f"/invitations/{invitation_id}",
+            parse=InvitationRevoked.model_validate, **opts,
+        )
+
+
+class _Connectors(_Resources):
+    def list(self, **opts: _Opts) -> Any:
+        """The connector types you can use in ``sources.create`` and the fields each takes."""
+        return self._c.request("GET", "/connectors", parse=ConnectorList.model_validate, **opts)
+
+
+def _source_ready(created: SourceCreated) -> bool:
+    readiness = created.source.readiness if created.source else None
+    return readiness is None or readiness.can_ask or readiness.phase == "not_connected"
 
 
 class _Sources(_Resources):
     def list(self, **opts: _Opts) -> Any:
         return self._c.request("GET", "/sources", parse=SourceList.model_validate, **opts)
 
-    def test(self, config: dict[str, Any], **opts: _Opts) -> Any:
-        return self._c.request("POST", "/sources/test", json_body={"config": config}, **opts)
-
     def get(self, source_id: str, **opts: _Opts) -> Any:
-        """One source, including its readiness."""
-        return self._c.request("GET", f"/sources/{source_id}", **opts)
+        """One source, including its ``readiness`` (``can_ask`` is true once Ask can use it)."""
+        return self._c.request(
+            "GET", f"/sources/{source_id}", parse=Source.model_validate, **opts
+        )
+
+    def test(self, config: dict[str, Any], **opts: _Opts) -> Any:
+        """Try a connection without saving anything."""
+        return self._c.request(
+            "POST", "/sources/test", json_body={"config": config},
+            parse=SourceTest.model_validate, **opts,
+        )
 
     def create(
         self,
@@ -154,27 +260,42 @@ class _Sources(_Resources):
         background: bool = False,
         **opts: _Opts,
     ) -> Any:
-        """Connect a source (admin, ``sources:write``).
+        """Connect a source (admin, ``sources:write``). Returns :class:`SourceCreated`.
 
-        By default waits (``wait`` seconds, default 300) until the catalog is ready and returns
-        the created source, or the finished :class:`Job` if the server answered 202.
-        ``background=True`` returns right away with whatever the server answered (the source,
-        or a Job to poll with ``jobs.wait``). Raises :class:`SourceTestFailedError` (HTTP 422,
-        ``.test_result``) when the connection test fails."""
-        return self._c.long(
+        The server tests the connection, saves the source (201) and then reads its tables in the
+        background. By default this call waits (up to ``wait`` seconds, default 300) until
+        ``source.readiness.can_ask`` is true: the first request carries ``Prefer: wait=N`` (N at
+        most 120) and the rest is polling ``sources.get``. If it is not ready by then the source
+        comes back as it stands (``phase: building``); nothing is raised, check
+        ``created.source.readiness.can_ask``. ``background=True`` returns right after the save.
+
+        A failed connection test raises :class:`SourceTestFailedError` (HTTP 422, ``.test_result``)
+        and saves nothing."""
+        return self._c.settle(
             "POST", "/sources", kind="source", wait=wait, background=background,
-            final=lambda payload: payload,
+            parse=SourceCreated.model_validate, is_done=_source_ready,
+            poll=lambda created: (
+                f"/sources/{created.source.id}" if created.source else None,
+                Source.model_validate,
+                lambda current, source: current.model_copy(update={"source": source}),
+            ),
             json_body={"config": config, "activate": activate}, **opts,
         )
 
     def activate(self, source_id: str, **opts: _Opts) -> Any:
-        return self._c.request("POST", f"/sources/{source_id}/activate", **opts)
+        """Make a source the one Ask and Gems use when a request names none."""
+        return self._c.request(
+            "POST", f"/sources/{source_id}/activate", parse=Source.model_validate, **opts
+        )
 
     def delete(self, source_id: str, **opts: _Opts) -> Any:
-        return self._c.request("DELETE", f"/sources/{source_id}", **opts)
+        return self._c.request(
+            "DELETE", f"/sources/{source_id}", parse=SourceDeleted.model_validate, **opts
+        )
 
     def connectors(self, **opts: _Opts) -> Any:
-        return self._c.request("GET", "/connectors", **opts)
+        """Same as ``client.connectors.list()``."""
+        return self._c.request("GET", "/connectors", parse=ConnectorList.model_validate, **opts)
 
 
 class _Files(_Resources):
@@ -184,65 +305,90 @@ class _Files(_Resources):
         *,
         filename: str | None = None,
         content_type: str | None = None,
-        on_duplicate: str | None = None,
+        on_duplicate: OnDuplicate | None = None,
         wait: float | None = None,
         background: bool = False,
         **opts: _Opts,
     ) -> Any:
-        """Upload a CSV or Excel file (``files:write``).
+        """Upload a CSV, Parquet, JSON or Excel file (``files:write``). Returns a :class:`File`.
 
-        By default waits (``wait`` seconds, default 300) for processing and returns the
-        :class:`File`, or the finished :class:`Job` if the server answered 202. ``background=True``
-        returns right away (a File to poll with ``files.get``, or a Job). ``on_duplicate`` says
-        what to do if the file already exists; without it a ``decision_required`` file waits for
-        ``files.duplicate``."""
+        The server stores the file (201, ``status: processing``) and reads it in the background.
+        By default this call waits (up to ``wait`` seconds, default 300) until the file is
+        settled: ``ready``, ``failed``, ``needs_attention`` or waiting for a decision. The first
+        request carries ``Prefer: wait=N`` (N at most 120) and the rest is polling ``files.get``.
+        On timeout the file comes back as it stands; nothing is raised. ``background=True``
+        returns right after the upload.
+
+        ``on_duplicate`` is ``"ask"`` (default: an identical file waits for ``files.duplicate``,
+        see ``file.decision_required``) or ``"keep_both"``."""
         part = _file_part(file, filename, content_type)
-        return self._c.long(
+        return self._c.settle(
             "POST", "/files", kind="file", wait=wait, background=background,
-            final=File.model_validate,
+            parse=File.model_validate, is_done=lambda f: f.is_settled,
+            poll=lambda f: (f"/files/{f.id}", File.model_validate, lambda _current, polled: polled),
             files={"file": part},
             data={"on_duplicate": on_duplicate} if on_duplicate else None, **opts,
         )
 
     def list(self, **opts: _Opts) -> Any:
-        return self._c.request("GET", "/files", **opts)
+        return self._c.request("GET", "/files", parse=FileList.model_validate, **opts)
 
     def get(self, file_id: str, **opts: _Opts) -> Any:
         """Status, analysis state and ``decision_required`` for one file."""
         return self._c.request("GET", f"/files/{file_id}", parse=File.model_validate, **opts)
 
-    def duplicate(self, file_id: str, decision: str, **opts: _Opts) -> Any:
-        """Answer a ``decision_required`` duplicate prompt."""
+    def duplicate(self, file_id: str, decision: DuplicateChoice, **opts: _Opts) -> Any:
+        """Answer ``decision_required: duplicate``: ``use_existing``, ``keep_both`` or ``cancel``."""
         return self._c.request(
-            "POST", f"/files/{file_id}/duplicate", json_body={"decision": decision}, **opts
+            "POST", f"/files/{file_id}/duplicate", json_body={"decision": decision},
+            parse=File.model_validate, **opts,
         )
 
     def delete(self, file_id: str, **opts: _Opts) -> Any:
-        return self._c.request("DELETE", f"/files/{file_id}", **opts)
+        """Delete a file; returns it with ``status: deleting``."""
+        return self._c.request("DELETE", f"/files/{file_id}", parse=File.model_validate, **opts)
 
 
 class _Gems(_Resources):
     def list(self, source_id: str | None = None, **opts: _Opts) -> Any:
+        """The Gems prepared for a source (default: the active one). ``state`` is ``none`` until
+        you call ``generate``. Text follows ``language=`` / ``Accept-Language``."""
         return self._c.request(
             "GET", "/gems", params={"source_id": source_id}, parse=GemList.model_validate, **opts
         )
 
     def generate(
-        self, source_id: str, *, wait: float | None = None, background: bool = False, **opts: _Opts
+        self,
+        source_id: str | None = None,
+        *,
+        wait: float | None = None,
+        background: bool = False,
+        **opts: _Opts,
     ) -> Any:
-        """Generate Gems. Blocks until done (up to ``wait`` seconds, default 600) and returns the
-        finished :class:`Job`; ``background=True`` returns the queued Job immediately."""
+        """Prepare Gems (metered). Returns the finished :class:`Job`.
+
+        The server answers 202 and a Job; this call sends ``Prefer: wait=N`` (N at most 60) and
+        polls the job until it ends or ``wait`` seconds (default 600) pass, then raises
+        :class:`JobTimeoutError` (the job keeps running). ``background=True`` returns the queued
+        Job at once; use ``jobs.wait`` or the ``gems.ready`` webhook. ``source_id`` defaults to
+        the active source."""
         return self._c.long(
             "POST", "/gems/generate", kind="gems", wait=wait, background=background,
-            final=_as_job, json_body={"source_id": source_id}, idempotent=True, **opts,
+            json_body={"source_id": source_id} if source_id else None, **opts,
         )
 
-    def get(self, gem_id: str, **opts: _Opts) -> Any:
-        return self._c.request("GET", f"/gems/{gem_id}", parse=GemModel.model_validate, **opts)
+    def get(self, gem_id: str, source_id: str | None = None, **opts: _Opts) -> Any:
+        return self._c.request(
+            "GET", f"/gems/{gem_id}", params={"source_id": source_id},
+            parse=GemModel.model_validate, **opts,
+        )
 
-    def image(self, gem_id: str, **opts: _Opts) -> Any:
-        """PNG bytes of a Gem's chart."""
-        return self._c.request("GET", f"/gems/{gem_id}/image.png", raw=True, accept="image/png", **opts)
+    def image(self, gem_id: str, source_id: str | None = None, **opts: _Opts) -> Any:
+        """PNG bytes of a Gem's chart (404 when a Gem has nothing worth drawing)."""
+        return self._c.request(
+            "GET", f"/gems/{gem_id}/image.png", params={"source_id": source_id}, raw=True,
+            accept="image/png", **opts,
+        )
 
 
 class _Dashboards(_Resources):
@@ -255,15 +401,23 @@ class _Dashboards(_Resources):
         )
 
     def image(
-        self, dashboard_id: str, *, wait: float | None = None, background: bool = False,
+        self,
+        dashboard_id: str,
+        *,
+        width: int | None = None,
+        wait: float | None = None,
+        background: bool = False,
         **opts: _Opts,
     ) -> Any:
-        """Render a dashboard image. Blocks until done (up to ``wait`` seconds, default 300) and
-        returns the finished :class:`Job` whose result is ``{image_url, width, height}``;
-        ``background=True`` returns the Job immediately. See ``render`` for PNG bytes."""
+        """Draw a dashboard as an image. Returns the finished :class:`Job`; its ``result`` is
+        ``{image_url, width, height}`` (``width`` 400 to 3200, default 1600).
+
+        The server answers 202 and a Job; this call sends ``Prefer: wait=N`` (N at most 60) and
+        polls until the job ends or ``wait`` seconds (default 300) pass. ``background=True``
+        returns the Job at once. See ``image_bytes`` and ``render`` for PNG bytes."""
         return self._c.long(
             "POST", f"/dashboards/{dashboard_id}/image", kind="dashboard", wait=wait,
-            background=background, final=_as_job, idempotent=True, **opts,
+            background=background, json_body={"width": width} if width else None, **opts,
         )
 
 
@@ -274,81 +428,71 @@ class _Predictions(_Resources):
         *,
         source_id: str | None = None,
         conversation_id: str | None = None,
+        language: str | None = None,
         wait: float | None = None,
         background: bool = False,
         **opts: _Opts,
     ) -> Any:
-        """Run a forecast or what-if (can take up to 30 minutes).
+        """Run a forecast or what-if (can take up to 30 minutes). Returns the finished :class:`Job`;
+        its ``result`` is ``{conversation_id, answer}``.
 
-        Blocks until done (up to ``wait`` seconds, default 1860) and returns the finished
-        :class:`Job`; ``background=True`` returns the queued Job immediately so you can poll
-        with ``jobs.wait`` or wait for a webhook."""
-        body = {"question": question, "source_id": source_id, "conversation_id": conversation_id}
+        The server answers 202 and a Job; this call sends ``Prefer: wait=N`` (N at most 60) and
+        polls until the job ends or ``wait`` seconds (default 1860) pass. ``background=True``
+        returns the queued Job at once so you can poll with ``jobs.wait`` or wait for the
+        ``prediction.completed`` webhook."""
+        body = {
+            "question": question, "source_id": source_id,
+            "conversation_id": conversation_id, "language": language,
+        }
         return self._c.long(
             "POST", "/predictions", kind="prediction", wait=wait, background=background,
-            final=_as_job, json_body={k: v for k, v in body.items() if v is not None},
+            json_body={k: v for k, v in body.items() if v is not None},
             idempotent=True, **opts,
         )
 
 
 class _Webhooks(_Resources):
     def list(self, **opts: _Opts) -> Any:
-        return self._c.request("GET", "/webhooks", **opts)
+        return self._c.request("GET", "/webhooks", parse=WebhookList.model_validate, **opts)
 
-    def create(self, url: str, events: list[str], **opts: _Opts) -> Any:
-        """Register a webhook. The returned ``secret`` is shown once; store it."""
+    def create(self, url: str, events: list[WebhookEvent] | list[str], **opts: _Opts) -> Any:
+        """Register a webhook (``webhooks:manage``). The returned ``secret`` (``whsec_...``) is
+        shown once; store it. ``events`` are ``gems.ready``, ``prediction.completed``,
+        ``job.completed`` and ``dashboard_image.ready``."""
         return self._c.request(
-            "POST", "/webhooks", json_body={"url": url, "events": events},
+            "POST", "/webhooks", json_body={"url": url, "events": list(events)},
             parse=Webhook.model_validate, **opts,
         )
 
     def delete(self, webhook_id: str, **opts: _Opts) -> Any:
+        """Delete a webhook. Returns None (HTTP 204)."""
         return self._c.request("DELETE", f"/webhooks/{webhook_id}", **opts)
 
     def test(self, webhook_id: str, **opts: _Opts) -> Any:
-        """Send a test delivery to the webhook URL."""
-        return self._c.request("POST", f"/webhooks/{webhook_id}/test", **opts)
+        """Send a test event to the webhook URL."""
+        return self._c.request(
+            "POST", f"/webhooks/{webhook_id}/test", parse=WebhookTestResult.model_validate, **opts
+        )
 
     def deliveries(self, webhook_id: str, **opts: _Opts) -> Any:
-        return self._c.request("GET", f"/webhooks/{webhook_id}/deliveries", **opts)
-
-
-class _Members(_Resources):
-    """Needs ``members:read`` (list) or ``members:manage`` (change role, remove)."""
-
-    def list(self, **opts: _Opts) -> Any:
-        return self._c.request("GET", "/members", **opts)
-
-    def update(self, member_id: str, role: str, **opts: _Opts) -> Any:
-        return self._c.request("PATCH", f"/members/{member_id}", json_body={"role": role}, **opts)
-
-    def remove(self, member_id: str, **opts: _Opts) -> Any:
-        return self._c.request("DELETE", f"/members/{member_id}", **opts)
-
-
-class _Invitations(_Resources):
-    def create(
-        self, role: str, *, email: str | None = None, phone: str | None = None, **opts: _Opts
-    ) -> Any:
-        """Invite by ``email`` or ``phone`` (``members:manage``)."""
-        if bool(email) == bool(phone):
-            raise ValueError("pass exactly one of email= or phone=")
-        body = {"role": role, **({"email": email} if email else {"phone": phone})}
-        return self._c.request("POST", "/invitations", json_body=body, **opts)
-
-    def list(self, **opts: _Opts) -> Any:
-        return self._c.request("GET", "/invitations", **opts)
-
-    def revoke(self, invitation_id: str, **opts: _Opts) -> Any:
-        return self._c.request("DELETE", f"/invitations/{invitation_id}", **opts)
+        """The 50 most recent deliveries."""
+        return self._c.request(
+            "GET", f"/webhooks/{webhook_id}/deliveries",
+            parse=WebhookDeliveryList.model_validate, **opts,
+        )
 
 
 class _Conversations(_Resources):
     def list(self, **opts: _Opts) -> Any:
-        return self._c.request("GET", "/conversations", **opts)
+        return self._c.request(
+            "GET", "/conversations", parse=ConversationList.model_validate, **opts
+        )
 
     def get(self, conversation_id: str, **opts: _Opts) -> Any:
-        return self._c.request("GET", f"/conversations/{conversation_id}", **opts)
+        """One conversation with its messages, oldest first."""
+        return self._c.request(
+            "GET", f"/conversations/{conversation_id}", parse=Conversation.model_validate, **opts
+        )
 
 
 class _JobsBase(_Resources):
@@ -394,6 +538,7 @@ class _SyncCore:
         parse: Callable[[Any], Any] | None = None,
         raw: bool = False,
         with_status: bool = False,
+        full: bool = False,
         request_timeout: float | None = None,
         **prep: Any,
     ) -> Any:
@@ -409,6 +554,8 @@ class _SyncCore:
                     raise MitraError(f"network error: {exc}") from exc
             if response is not None:
                 if response.status_code < 400:
+                    if full:
+                        return response
                     decoded = _core.decode(response, parse, raw)
                     return (response.status_code, decoded) if with_status else decoded
                 if response.status_code not in _core.RETRY_STATUSES or not _core.should_retry(
@@ -426,29 +573,58 @@ class _SyncCore:
         kind: str,
         wait: float | None,
         background: bool,
-        final: Callable[[Any], Any],
         **prep: Any,
-    ) -> Any:
-        """A call that may outlive one request: send ``Prefer: wait=N``, and on 202 poll the job."""
+    ) -> Job:
+        """A job-based call: send ``Prefer: wait=N``, then poll ``GET /jobs/{id}`` until it ends."""
         prefer, timeout = _long_plan(kind, wait, background)
         started = time.monotonic()
-        status, payload = self.request(
-            method, path, prefer=prefer, with_status=True,
+        job = self.request(
+            method, path, prefer=prefer, parse=_as_job,
             request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
         )
-        if status == 202:
-            job = _as_job(payload)
-            if background:
-                return job
-            left = max(timeout - (time.monotonic() - started), 0.0)
-            return self.jobs.wait(job, left, **_job_opts(prep))
-        result = final(payload)
-        if isinstance(result, Job) and not background:
-            if result.is_terminal:
-                return _check_terminal(result)
-            left = max(timeout - (time.monotonic() - started), 0.0)
-            return self.jobs.wait(result, left, **_job_opts(prep))
-        return result
+        if background:
+            return job
+        if job.is_terminal:
+            return _check_terminal(job)
+        left = max(timeout - (time.monotonic() - started), 0.0)
+        return self.jobs.wait(job, left, **_job_opts(prep))
+
+    def settle(
+        self,
+        method: str,
+        path: str,
+        *,
+        kind: str,
+        wait: float | None,
+        background: bool,
+        parse: Callable[[Any], Any],
+        is_done: Callable[[Any], bool],
+        poll: Callable[[Any], tuple[str | None, Callable[[Any], Any], Callable[[Any, Any], Any]]],
+        **prep: Any,
+    ) -> Any:
+        """A resource call (source, file): send ``Prefer: wait=N``, then poll the resource itself
+        until ``is_done``. On timeout the resource is returned as it stands (nothing is raised)."""
+        prefer, timeout = _long_plan(kind, wait, background)
+        started = time.monotonic()
+        result = self.request(
+            method, path, prefer=prefer, parse=parse,
+            request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
+        )
+        if background or is_done(result):
+            return result
+        poll_path, poll_parse, merge = poll(result)
+        if poll_path is None:
+            return result
+        opts = _job_opts(prep)
+        delays = _poll_delays(*_RESOURCE_POLL)
+        while True:
+            delay = next(delays)
+            if time.monotonic() + delay > started + timeout:
+                return result
+            time.sleep(delay)
+            result = merge(result, self.request("GET", poll_path, parse=poll_parse, **opts))
+            if is_done(result):
+                return result
 
     def stream(self, **prep: Any) -> Iterator[StreamEvent]:
         kwargs = _core.prepare(self.settings, "POST", "/ask", accept="text/event-stream", **prep)
@@ -504,10 +680,39 @@ class _SyncJobs(_JobsBase):
         return _check_terminal(current) if raise_on_failure else current
 
 
+def _redirect_target(response: httpx.Response) -> str | None:
+    if 300 <= response.status_code < 400:
+        return response.headers.get("location")
+    return None
+
+
 class _SyncDashboards(_Dashboards):
-    def render(self, dashboard_id: str, *, timeout: float = 300.0, **opts: _Opts) -> bytes:
-        """Render a dashboard and return PNG bytes (starts the job, waits, downloads)."""
-        job = self.image(dashboard_id, wait=timeout, **opts)
+    def image_bytes(
+        self, dashboard_id: str, *, width: int | None = None, timeout: float = 300.0,
+        **opts: _Opts,
+    ) -> bytes:
+        """PNG bytes of a dashboard: ``GET /dashboards/{id}/image.png``.
+
+        The server redirects (303) to an image drawn in the last ten minutes, or answers 202 and a
+        Job; this method follows either and waits up to ``timeout`` seconds for the Job."""
+        response = self._c.request(
+            "GET", f"/dashboards/{dashboard_id}/image.png", params={"width": width},
+            full=True, accept="image/png", **opts,
+        )
+        target = _redirect_target(response)
+        if target:
+            return self._c.download(target)
+        if response.headers.get("content-type", "").startswith("image/"):
+            return response.content
+        job = self._c.jobs.wait(Job.model_validate(response.json()), timeout, **_job_opts(opts))
+        return self._c.download((job.result or {})["image_url"])
+
+    def render(
+        self, dashboard_id: str, *, width: int | None = None, timeout: float = 300.0,
+        **opts: _Opts,
+    ) -> bytes:
+        """Draw a dashboard (``POST .../image``), wait for the Job and return the PNG bytes."""
+        job = self.image(dashboard_id, width=width, wait=timeout, **opts)
         return self._c.download((job.result or {})["image_url"])
 
 
@@ -522,16 +727,18 @@ class Mitra:
 
     Args:
         api_key: Workspace API key (``mtk_...``). Falls back to ``MATIH_API_KEY``.
-        access_token: OAuth access token (``mto_...``). Use instead of ``api_key``.
-        base_url: Defaults to ``https://workspace.matih.ai/api/v1`` (or ``MATIH_BASE_URL``).
+        access_token: OAuth access token (``mto_...``). Use instead of ``api_key``
+            (falls back to ``MATIH_ACCESS_TOKEN``).
+        base_url: The host only, default ``https://workspace.matih.ai`` (or ``MATIH_BASE_URL``).
+            ``/api/v1`` is appended for you.
         workspace_id: Sent as ``X-Matih-Workspace`` (OAuth tokens; API keys are pinned).
         language: Default BCP-47 language such as ``hi-IN``, sent as ``Accept-Language``.
         timeout: Per-request timeout in seconds.
         max_retries: Retries for 429, and for 5xx or network errors on safe calls.
         http_client: Bring your own ``httpx.Client`` (proxies, tests).
 
-    Every endpoint method also accepts ``workspace_id=``, ``language=`` and, for calls that
-    cost credits, ``idempotency_key=``.
+    Every endpoint method also accepts ``workspace_id=`` and ``language=``. ``ask`` and
+    ``predictions.create`` also accept ``idempotency_key=`` (generated for you when omitted).
     """
 
     def __init__(
@@ -562,6 +769,7 @@ class Mitra:
         self._core = core
         self.workspaces = _Workspaces(core)
         self.sources = _Sources(core)
+        self.connectors = _Connectors(core)
         self.files = _Files(core)
         self.gems = _Gems(core)
         self.dashboards = _SyncDashboards(core)
@@ -648,7 +856,6 @@ class Mitra:
             files={"file": _file_part(file, filename, content_type)},
             data=data,
             parse=Answer.model_validate,
-            idempotent=True,
             **opts,
         )
 
@@ -682,6 +889,7 @@ class _AsyncCore:
         parse: Callable[[Any], Any] | None = None,
         raw: bool = False,
         with_status: bool = False,
+        full: bool = False,
         request_timeout: float | None = None,
         **prep: Any,
     ) -> Any:
@@ -697,6 +905,8 @@ class _AsyncCore:
                     raise MitraError(f"network error: {exc}") from exc
             if response is not None:
                 if response.status_code < 400:
+                    if full:
+                        return response
                     decoded = _core.decode(response, parse, raw)
                     return (response.status_code, decoded) if with_status else decoded
                 if response.status_code not in _core.RETRY_STATUSES or not _core.should_retry(
@@ -714,29 +924,57 @@ class _AsyncCore:
         kind: str,
         wait: float | None,
         background: bool,
-        final: Callable[[Any], Any],
         **prep: Any,
-    ) -> Any:
-        """A call that may outlive one request: send ``Prefer: wait=N``, and on 202 poll the job."""
+    ) -> Job:
+        """A job-based call: send ``Prefer: wait=N``, then poll ``GET /jobs/{id}`` until it ends."""
         prefer, timeout = _long_plan(kind, wait, background)
         started = time.monotonic()
-        status, payload = await self.request(
-            method, path, prefer=prefer, with_status=True,
+        job = await self.request(
+            method, path, prefer=prefer, parse=_as_job,
             request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
         )
-        if status == 202:
-            job = _as_job(payload)
-            if background:
-                return job
-            left = max(timeout - (time.monotonic() - started), 0.0)
-            return await self.jobs.wait(job, left, **_job_opts(prep))
-        result = final(payload)
-        if isinstance(result, Job) and not background:
-            if result.is_terminal:
-                return _check_terminal(result)
-            left = max(timeout - (time.monotonic() - started), 0.0)
-            return await self.jobs.wait(result, left, **_job_opts(prep))
-        return result
+        if background:
+            return job
+        if job.is_terminal:
+            return _check_terminal(job)
+        left = max(timeout - (time.monotonic() - started), 0.0)
+        return await self.jobs.wait(job, left, **_job_opts(prep))
+
+    async def settle(
+        self,
+        method: str,
+        path: str,
+        *,
+        kind: str,
+        wait: float | None,
+        background: bool,
+        parse: Callable[[Any], Any],
+        is_done: Callable[[Any], bool],
+        poll: Callable[[Any], tuple[str | None, Callable[[Any], Any], Callable[[Any, Any], Any]]],
+        **prep: Any,
+    ) -> Any:
+        """Async version of the sync ``settle``: poll the resource itself until ``is_done``."""
+        prefer, timeout = _long_plan(kind, wait, background)
+        started = time.monotonic()
+        result = await self.request(
+            method, path, prefer=prefer, parse=parse,
+            request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
+        )
+        if background or is_done(result):
+            return result
+        poll_path, poll_parse, merge = poll(result)
+        if poll_path is None:
+            return result
+        opts = _job_opts(prep)
+        delays = _poll_delays(*_RESOURCE_POLL)
+        while True:
+            delay = next(delays)
+            if time.monotonic() + delay > started + timeout:
+                return result
+            await asyncio.sleep(delay)
+            result = merge(result, await self.request("GET", poll_path, parse=poll_parse, **opts))
+            if is_done(result):
+                return result
 
     async def stream(self, **prep: Any) -> AsyncIterator[StreamEvent]:
         kwargs = _core.prepare(self.settings, "POST", "/ask", accept="text/event-stream", **prep)
@@ -796,9 +1034,31 @@ class _AsyncJobs(_JobsBase):
 
 
 class _AsyncDashboards(_Dashboards):
-    async def render(self, dashboard_id: str, *, timeout: float = 300.0, **opts: _Opts) -> bytes:
-        """Render a dashboard and return PNG bytes (starts the job, waits, downloads)."""
-        job = await self.image(dashboard_id, wait=timeout, **opts)
+    async def image_bytes(
+        self, dashboard_id: str, *, width: int | None = None, timeout: float = 300.0,
+        **opts: _Opts,
+    ) -> bytes:
+        """PNG bytes of a dashboard: follows the 303 redirect, or waits for the Job on a 202."""
+        response = await self._c.request(
+            "GET", f"/dashboards/{dashboard_id}/image.png", params={"width": width},
+            full=True, accept="image/png", **opts,
+        )
+        target = _redirect_target(response)
+        if target:
+            return await self._c.download(target)
+        if response.headers.get("content-type", "").startswith("image/"):
+            return response.content
+        job = await self._c.jobs.wait(
+            Job.model_validate(response.json()), timeout, **_job_opts(opts)
+        )
+        return await self._c.download((job.result or {})["image_url"])
+
+    async def render(
+        self, dashboard_id: str, *, width: int | None = None, timeout: float = 300.0,
+        **opts: _Opts,
+    ) -> bytes:
+        """Draw a dashboard (``POST .../image``), wait for the Job and return the PNG bytes."""
+        job = await self.image(dashboard_id, width=width, wait=timeout, **opts)
         return await self._c.download((job.result or {})["image_url"])
 
 
@@ -842,6 +1102,7 @@ class AsyncMitra:
         self._core = core
         self.workspaces = _Workspaces(core)
         self.sources = _Sources(core)
+        self.connectors = _Connectors(core)
         self.files = _Files(core)
         self.gems = _Gems(core)
         self.dashboards = _AsyncDashboards(core)
@@ -921,7 +1182,6 @@ class AsyncMitra:
             files={"file": _file_part(file, filename, content_type)},
             data=data,
             parse=Answer.model_validate,
-            idempotent=True,
             **opts,
         )
 

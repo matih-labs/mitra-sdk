@@ -13,8 +13,17 @@ import httpx
 from ._version import __version__
 from .errors import MitraError, error_from_response
 
-DEFAULT_BASE_URL = "https://workspace.matih.ai/api/v1"
+DEFAULT_BASE_URL = "https://workspace.matih.ai"
+API_PREFIX = "/api/v1"
 RETRY_STATUSES = frozenset({429, 502, 503, 504})
+
+
+def api_root(base_url: str) -> str:
+    """The API root for a host: ``https://workspace.matih.ai`` -> ``.../api/v1``.
+
+    ``base_url`` is the host only. A value that already ends in ``/api/v1`` is accepted as is."""
+    root = base_url.strip().rstrip("/")
+    return root if root.endswith(API_PREFIX) else root + API_PREFIX
 
 
 class Settings:
@@ -29,15 +38,18 @@ class Settings:
         timeout: float,
         max_retries: int,
     ) -> None:
-        credential = api_key or access_token or os.environ.get("MATIH_API_KEY")
-        if not credential:
-            raise ValueError("pass api_key=... or access_token=... (or set MATIH_API_KEY)")
         if api_key and access_token:
             raise ValueError("pass either api_key or access_token, not both")
-        self.credential = credential
-        self.base_url = (base_url or os.environ.get("MATIH_BASE_URL") or DEFAULT_BASE_URL).rstrip(
-            "/"
+        credential = (
+            api_key
+            or access_token
+            or os.environ.get("MATIH_API_KEY")
+            or os.environ.get("MATIH_ACCESS_TOKEN")
         )
+        if not credential:
+            raise ValueError("pass api_key=... or access_token=... (or set MATIH_API_KEY)")
+        self.credential = credential
+        self.base_url = api_root(base_url or os.environ.get("MATIH_BASE_URL") or DEFAULT_BASE_URL)
         self.workspace_id = workspace_id
         self.language = language
         self.timeout = timeout

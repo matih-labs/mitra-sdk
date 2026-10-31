@@ -11,7 +11,7 @@ class MitraError(Exception):
     Attributes:
         message: Human-readable message from the API.
         status: HTTP status code, when the error came from a response.
-        category: API error category, for example ``scope`` or ``credits``.
+        category: API error category, for example ``scope``, ``not_ready`` or ``rate_limited``.
         code: Optional machine-readable code.
         request_id: Value of the ``x-request-id`` response header, quote it in support requests.
         body: The decoded response body, if any.
@@ -53,15 +53,16 @@ class AuthError(MitraError):
 
 
 class PermissionDeniedError(MitraError):
-    """403: category ``scope``, ``workspace_role`` or ``source_access``."""
+    """403: category ``scope``, ``workspace_role``, ``workspace`` or ``source_access``."""
 
 
 class CreditsError(MitraError):
-    """402: category ``credits`` or ``member_cap``."""
+    """402: category ``not_ready`` (the workspace has no credits left) or ``member_cap``."""
 
 
 class BusyError(MitraError):
-    """409: category ``busy``. Another request is running; retry shortly."""
+    """409: category ``busy`` (another prediction is running; retry shortly), or a conflict such as
+    revoking an invitation that was already settled. Read ``category`` and ``message``."""
 
 
 class RateLimitError(MitraError):
@@ -89,7 +90,9 @@ class JobTimeoutError(MitraError):
 
 
 class SourceTestFailedError(MitraError):
-    """422 from ``sources.create``: the connection test failed. ``test_result`` has the details."""
+    """422 from ``sources.create``: the connection test failed and nothing was saved.
+    ``test_result`` is the server's ``detail.test`` (``ok``, ``message``, ``error_category``,
+    ``field``, ...), or None."""
 
     def __init__(self, message: str, *, test_result: Any = None, **kwargs: Any) -> None:
         super().__init__(message, **kwargs)
@@ -135,8 +138,14 @@ def error_from_response(
         "request_id": request_id,
         "body": body,
     }
-    if status == 422 and method == "POST" and path and path.rstrip("/").endswith("/sources"):
-        test_result = body.get("detail", body) if isinstance(body, dict) else body
+    if (
+        status == 422
+        and isinstance(detail, dict)
+        and method == "POST"
+        and path
+        and path.rstrip("/").endswith("/sources")
+    ):
+        test_result = detail.get("test") if isinstance(detail, dict) else None
         return SourceTestFailedError(message, test_result=test_result, **kwargs)
     if status == 429:
         return RateLimitError(message, retry_after=retry_after, **kwargs)
