@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/matih-labs/mitra-sdk/main/assets/matih-logo.png" alt="Matih" width="160"></p>
+
 # mitra-sdk (Python)
 
 Python client for the Matih public API. Sync (`Mitra`) and async (`AsyncMitra`) clients on
@@ -26,7 +28,7 @@ API keys are pinned to one workspace. OAuth tokens pick a workspace per client w
 `workspace_id=` (sent as `X-Matih-Workspace`) or per call, or set a default with
 `client.workspaces.use(workspace_id)`. Keep keys in environment variables, never in source.
 
-Admins create keys under `Settings > API & MCP`, choose the products the key may use (all on by default) and revoke keys in the same screen. Keys never expire by default. Use an API key here; an MCP connector key works only on `/api/v1/mcp`. Scopes: `workspaces:read`, `members:read`, `members:manage`, `sources:read`, `sources:write`, `files:read`, `files:write`, `gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`.
+Admins create keys under `Settings › API & MCP`, choose the products the key may use (all on by default) and revoke keys in the same screen. Keys never expire by default. Use an API key here; an MCP connector key works only on `/api/v1/mcp`. Scopes: `workspaces:read`, `members:read`, `members:manage`, `sources:read`, `sources:write`, `files:read`, `files:write`, `gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`.
 
 ## Ask
 

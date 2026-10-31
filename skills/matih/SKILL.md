@@ -90,7 +90,7 @@ More recipes: `examples/curl/README.md` in this repository.
 
 ## References
 
-- `references/auth.md`: API keys, MCP connector keys (created under `Settings > API & MCP`), OAuth, the 13 scopes, headers.
+- `references/auth.md`: API keys, MCP connector keys (created under `Settings › API & MCP`), OAuth, the 13 scopes, headers.
 - `references/workspaces.md`: listing and switching workspaces.
 - `references/asking.md`: clarification, empty and error handling, follow-ups, language and audio, streaming.
 - `references/gems.md`: Gems listing, generation, images.

@@ -34,7 +34,7 @@ After switching, call `list_sources` again. Source ids differ per workspace and 
 
 ## API keys cannot switch
 
-An API key is pinned to the workspace it was created in. A different `X-Matih-Workspace` header is refused, and `use_workspace` cannot move it. To work in another workspace the user must create a key there (`Settings > API & MCP`), or connect through OAuth.
+An API key is pinned to the workspace it was created in. A different `X-Matih-Workspace` header is refused, and `use_workspace` cannot move it. To work in another workspace the user must create a key there (`Settings › API & MCP`), or connect through OAuth.
 
 ## Members
 

@@ -4,7 +4,7 @@ Every request carries `Authorization: Bearer <credential>`. There are two creden
 
 ## API keys and MCP connector keys (`mtk_...`)
 
-- Created by a workspace admin in Matih under `Settings > API & MCP`.
+- Created by a workspace admin in Matih under `Settings › API & MCP`.
 - Two kinds: an API key works on all of `/api/v1`; an MCP connector key works only on `/api/v1/mcp` and returns 403 elsewhere. Use a connector key for MCP clients (an API key also works there).
 - The admin chooses the products the key may use, all on by default: Ask, Data sources, Files, Predictive, Dashboards, Gems, Workspaces, Users & members, Webhooks. A product left off means the matching scopes are missing and calls return 403 `scope`.
 - Keys never expire by default. Revoke them in the same screen.

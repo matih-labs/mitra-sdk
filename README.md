@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/matih-labs/mitra-sdk/main/assets/matih-logo.png" alt="Matih" width="160"></p>
+
 # mitra-sdk
 
 Client-side tools for the Matih public API: the OpenAPI spec, Python and TypeScript SDKs, an
@@ -22,7 +24,7 @@ MCP setup guide, an agent skill, and examples such as a Slack bot.
 
 ## Quickstart
 
-Create an API key as a workspace admin under `Settings > API & MCP`, then:
+Create an API key as a workspace admin under `Settings › API & MCP`, then:
 
 ```bash
 export MATIH_API_KEY=mtk_...   # never commit this
@@ -91,7 +93,7 @@ OAuth 2.1 access token (`mto_...`, authorization code with PKCE and dynamic clie
 registration; discovery at `/.well-known/oauth-authorization-server`). OAuth tokens choose a
 workspace with the `X-Matih-Workspace` header or `PUT /me/workspace`.
 
-Workspace admins create keys in the Matih app under `Settings > API & MCP`. They choose the
+Workspace admins create keys in the Matih app under `Settings › API & MCP`. They choose the
 products the key may use (all on by default): Ask, Data sources, Files, Predictive, Dashboards,
 Gems, Workspaces, Users & members and Webhooks. Keys never expire by default; revoke them in the
 same screen. There are two kinds: an API key works on all of `/api/v1`, and an MCP connector key

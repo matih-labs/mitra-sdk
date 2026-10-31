@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/matih-labs/mitra-sdk/main/assets/matih-logo.png" alt="Matih" width="160"></p>
+
 # OpenAPI spec
 
 `openapi.json` in this directory is the OpenAPI 3.1 description of the Matih public API

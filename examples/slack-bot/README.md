@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/matih-labs/mitra-sdk/main/assets/matih-logo.png" alt="Matih" width="160"></p>
+
 # Matih Slack bot
 
 A reference Slack bot built on the [Python SDK](../../sdks/python). It runs in Socket Mode, so it
@@ -20,7 +22,7 @@ languages work as typed.
 1. Create a Slack app from [`manifest.yml`](manifest.yml) (Slack, Your Apps, Create New App, From
    a manifest). Install it, then copy the **Bot token** (`xoxb-`) and create an **App-level token**
    (`xapp-`) with the `connections:write` scope.
-2. In Matih, as a workspace admin, create an API key under **Settings > API & MCP** with the
+2. In Matih, as a workspace admin, create an API key under **Settings › API & MCP** with the
    scopes `workspaces:read`, `sources:read`, `gems:read`, `ask`, `dashboards:read` and `predict`.
 3. Configure and run:
 

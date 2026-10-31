@@ -1,9 +1,11 @@
+<p align="center"><img src="https://raw.githubusercontent.com/matih-labs/mitra-sdk/main/assets/matih-logo.png" alt="Matih" width="160"></p>
+
 # Matih API: curl recipes
 
 Copy-paste recipes for every endpoint of the public API. Needs `curl`, and `jq` for a few of the loops.
 
 ```bash
-export MATIH_API_KEY=mtk_...            # create under `Settings > API & MCP` in Matih
+export MATIH_API_KEY=mtk_...            # create under `Settings › API & MCP` in Matih
 export BASE=https://workspace.matih.ai/api/v1
 AUTH="Authorization: Bearer $MATIH_API_KEY"
 ```

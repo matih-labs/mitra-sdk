@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/matih-labs/mitra-sdk/main/assets/matih-logo.png" alt="Matih" width="160"></p>
+
 # Matih MCP server
 
 Matih hosts a Model Context Protocol server so AI assistants can ask questions of your data, read Gems, render dashboards and run forecasts.
@@ -15,7 +17,7 @@ OAuth discovery documents, if your client asks for them:
 ## Which auth to use
 
 - OAuth: best for interactive clients. You sign in once in the browser and the client handles tokens. It uses your own Matih account and you pick the workspace with `use_workspace`.
-- MCP connector key: best for MCP clients that take a header or token, and for headless agents and CI. An admin creates it in Matih under `Settings > API & MCP`. A connector key works only on `/api/v1/mcp` and returns 403 elsewhere. It is pinned to one workspace and acts as its creator, never exceeding that member's role.
+- MCP connector key: best for MCP clients that take a header or token, and for headless agents and CI. An admin creates it in Matih under `Settings › API & MCP`. A connector key works only on `/api/v1/mcp` and returns 403 elsewhere. It is pinned to one workspace and acts as its creator, never exceeding that member's role.
 - API key: also works on the MCP endpoint, and additionally on all of `/api/v1`. Prefer a connector key when the key is only for an MCP client.
 
 Admins choose the products a key may use (Ask, Data sources, Files, Predictive, Dashboards, Gems, Workspaces, Users & members, Webhooks; all on by default). Keys never expire by default; revoke them in the same screen.
