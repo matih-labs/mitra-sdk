@@ -3,7 +3,11 @@ name: release
 # Publishing happens only when a tag is pushed. One tag releases both packages, which
 # share a version:
 #   vX.Y.Z  -> PyPI  (trusted publishing, environment "pypi", no stored token)
-#           -> npm   (with provenance; needs the NPM_TOKEN secret)
+#           -> npm   (trusted publishing with provenance, no stored token)
+# Both trust this repository and this workflow file by name (release.yml), and PyPI also the
+# environment "pypi": renaming either breaks publishing until pypi.org / npmjs.com are updated.
+# npm can only trust a package that exists, so a new npm package is published once by hand
+# (a placeholder is enough) before its trusted publisher is added; PyPI takes a pending one.
 # Each job refuses to publish when the tag does not match its package version.
 
 on:
@@ -69,7 +73,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - name: Publish to npm
+      # Tokenless trusted publishing needs npm 11.5.1 or later; Node 20 ships npm 10.
+      - name: Upgrade npm
+        run: npm install -g npm@11.6.2 && npm --version
+      - name: Publish to npm (trusted publishing)
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
