@@ -1,0 +1,714 @@
+"""Sync and async clients for the Matih public API."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any, BinaryIO
+from urllib.parse import urljoin
+
+import httpx
+
+from . import _core
+from .errors import JobFailedError, JobTimeoutError, MitraError
+from .models import (
+    Answer,
+    Dashboard,
+    DashboardList,
+    File,
+    GemList,
+    Job,
+    SourceList,
+    StreamEvent,
+    Webhook,
+    WorkspaceList,
+)
+from .models import Gem as GemModel
+
+# Per-call options accepted by every method as keyword arguments:
+#   workspace_id=..., language=..., idempotency_key=...
+_Opts = Any
+
+DEFAULT_JOB_TIMEOUT = 1860.0  # a little over the 30 minute maximum for predictions
+
+
+def _as_job(payload: Any) -> Job:
+    return Job.model_validate(payload)
+
+
+def _file_part(
+    file: str | os.PathLike[str] | bytes | BinaryIO,
+    filename: str | None,
+    content_type: str | None,
+) -> tuple[str, Any, str | None]:
+    """Return an httpx multipart tuple. Paths are read fully so retries can resend them."""
+    if isinstance(file, (str, os.PathLike)):
+        with open(file, "rb") as handle:
+            content = handle.read()
+        name = filename or os.path.basename(os.fspath(file))
+    elif isinstance(file, bytes):
+        content, name = file, filename or "upload"
+    else:
+        content, name = file.read(), filename or getattr(file, "name", "upload")
+        name = os.path.basename(str(name))
+    return name, content, content_type
+
+
+def _poll_delays(interval: float, max_interval: float) -> Iterator[float]:
+    delay = interval
+    while True:
+        yield delay
+        delay = min(delay * 1.5, max_interval)
+
+
+def _check_terminal(job: Job) -> Job:
+    if job.state == "succeeded":
+        return job
+    message = (job.error.message if job.error else None) or f"job {job.id} {job.state}"
+    raise JobFailedError(
+        message,
+        job=job,
+        category=(job.error.category if job.error else None) or job.state,
+    )
+
+
+class _Resources:
+    """Endpoint methods, written once. Each returns ``core.request(...)``: a value on the
+    sync client and an awaitable on the async client."""
+
+    def __init__(self, core: Any) -> None:
+        self._c = core
+
+
+class _Workspaces(_Resources):
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/workspaces", parse=WorkspaceList.model_validate, **opts)
+
+    def use(self, workspace_id: str, **opts: _Opts) -> Any:
+        """Set the default workspace (``PUT /me/workspace``). OAuth tokens only."""
+        return self._c.request("PUT", "/me/workspace", json_body={"workspace_id": workspace_id}, **opts)
+
+
+class _Sources(_Resources):
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/sources", parse=SourceList.model_validate, **opts)
+
+    def test(self, config: dict[str, Any], **opts: _Opts) -> Any:
+        return self._c.request("POST", "/sources/test", json_body={"config": config}, **opts)
+
+    def create(self, config: dict[str, Any], *, activate: bool | None = None, **opts: _Opts) -> Any:
+        body: dict[str, Any] = {"config": config}
+        if activate is not None:
+            body["activate"] = activate
+        return self._c.request("POST", "/sources", json_body=body, **opts)
+
+    def connectors(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/connectors", **opts)
+
+
+class _Files(_Resources):
+    def upload(
+        self,
+        file: str | os.PathLike[str] | bytes | BinaryIO,
+        *,
+        filename: str | None = None,
+        content_type: str | None = None,
+        **opts: _Opts,
+    ) -> Any:
+        """Upload a CSV or Excel file. Returns a :class:`File`; poll ``files.get`` until ready."""
+        part = _file_part(file, filename, content_type)
+        return self._c.request(
+            "POST", "/files", files={"file": part}, parse=File.model_validate, **opts
+        )
+
+    def get(self, file_id: str, **opts: _Opts) -> Any:
+        return self._c.request("GET", f"/files/{file_id}", parse=File.model_validate, **opts)
+
+
+class _Gems(_Resources):
+    def list(self, source_id: str | None = None, **opts: _Opts) -> Any:
+        return self._c.request(
+            "GET", "/gems", params={"source_id": source_id}, parse=GemList.model_validate, **opts
+        )
+
+    def generate(self, source_id: str, **opts: _Opts) -> Any:
+        """Start Gem generation. Returns a 202 :class:`Job`; use ``jobs.wait``."""
+        return self._c.request(
+            "POST",
+            "/gems/generate",
+            json_body={"source_id": source_id},
+            parse=_as_job,
+            idempotent=True,
+            **opts,
+        )
+
+    def get(self, gem_id: str, **opts: _Opts) -> Any:
+        return self._c.request("GET", f"/gems/{gem_id}", parse=GemModel.model_validate, **opts)
+
+    def image(self, gem_id: str, **opts: _Opts) -> Any:
+        """PNG bytes of a Gem's chart."""
+        return self._c.request("GET", f"/gems/{gem_id}/image.png", raw=True, accept="image/png", **opts)
+
+
+class _Dashboards(_Resources):
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/dashboards", parse=DashboardList.model_validate, **opts)
+
+    def get(self, dashboard_id: str, **opts: _Opts) -> Any:
+        return self._c.request(
+            "GET", f"/dashboards/{dashboard_id}", parse=Dashboard.model_validate, **opts
+        )
+
+    def image(self, dashboard_id: str, **opts: _Opts) -> Any:
+        """Start rendering a dashboard image. Returns a 202 :class:`Job` whose result is
+        ``{image_url, width, height}``. See ``render`` for the one-call version."""
+        return self._c.request(
+            "POST", f"/dashboards/{dashboard_id}/image", parse=_as_job, idempotent=True, **opts
+        )
+
+
+class _Predictions(_Resources):
+    def create(
+        self,
+        question: str,
+        *,
+        source_id: str | None = None,
+        conversation_id: str | None = None,
+        **opts: _Opts,
+    ) -> Any:
+        """Start a forecast or what-if. Returns a 202 :class:`Job` (can take up to 30 minutes)."""
+        body = {"question": question, "source_id": source_id, "conversation_id": conversation_id}
+        return self._c.request(
+            "POST",
+            "/predictions",
+            json_body={k: v for k, v in body.items() if v is not None},
+            parse=_as_job,
+            idempotent=True,
+            **opts,
+        )
+
+
+class _Webhooks(_Resources):
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/webhooks", **opts)
+
+    def create(self, url: str, events: list[str], **opts: _Opts) -> Any:
+        """Register a webhook. The returned ``secret`` is shown once; store it."""
+        return self._c.request(
+            "POST", "/webhooks", json_body={"url": url, "events": events},
+            parse=Webhook.model_validate, **opts,
+        )
+
+    def delete(self, webhook_id: str, **opts: _Opts) -> Any:
+        return self._c.request("DELETE", f"/webhooks/{webhook_id}", **opts)
+
+
+class _Conversations(_Resources):
+    def list(self, **opts: _Opts) -> Any:
+        return self._c.request("GET", "/conversations", **opts)
+
+    def get(self, conversation_id: str, **opts: _Opts) -> Any:
+        return self._c.request("GET", f"/conversations/{conversation_id}", **opts)
+
+
+class _JobsBase(_Resources):
+    def get(self, job_id: str, **opts: _Opts) -> Any:
+        return self._c.request("GET", f"/jobs/{job_id}", parse=_as_job, **opts)
+
+    def cancel(self, job_id: str, **opts: _Opts) -> Any:
+        return self._c.request("POST", f"/jobs/{job_id}/cancel", parse=_as_job, **opts)
+
+
+def _ask_body(
+    question: str,
+    conversation_id: str | None,
+    source_id: str | None,
+    language: str | None,
+    stream: bool,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {"question": question}
+    if conversation_id:
+        body["conversation_id"] = conversation_id
+    if source_id:
+        body["source_id"] = source_id
+    if language:
+        body["language"] = language
+    if stream:
+        body["stream"] = True
+    return body
+
+
+# --------------------------------------------------------------------------- sync
+
+
+class _SyncCore:
+    def __init__(self, settings: _core.Settings, http: httpx.Client) -> None:
+        self.settings = settings
+        self.http = http
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        parse: Callable[[Any], Any] | None = None,
+        raw: bool = False,
+        **prep: Any,
+    ) -> Any:
+        kwargs = _core.prepare(self.settings, method, path, **prep)
+        attempt = 0
+        while True:
+            response: httpx.Response | None = None
+            try:
+                response = self.http.request(**kwargs, timeout=self.settings.timeout)
+            except httpx.TransportError as exc:
+                if not _core.should_retry(kwargs, None, attempt, self.settings.max_retries):
+                    raise MitraError(f"network error: {exc}") from exc
+            if response is not None:
+                if response.status_code < 400:
+                    return _core.decode(response, parse, raw)
+                if response.status_code not in _core.RETRY_STATUSES or not _core.should_retry(
+                    kwargs, response.status_code, attempt, self.settings.max_retries
+                ):
+                    _core.raise_for_response(response)
+            time.sleep(_core.retry_delay(response, attempt))
+            attempt += 1
+
+    def stream(self, **prep: Any) -> Iterator[StreamEvent]:
+        kwargs = _core.prepare(self.settings, "POST", "/ask", accept="text/event-stream", **prep)
+        with self.http.stream("POST", **{k: v for k, v in kwargs.items() if k != "method"},
+                              timeout=httpx.Timeout(self.settings.timeout, read=None)) as response:
+            if response.status_code >= 400:
+                response.read()
+                _core.raise_for_response(response)
+            frame: list[str] = []
+            for line in response.iter_lines():
+                if line == "":
+                    parsed = _core.parse_sse(frame)
+                    frame = []
+                    if parsed:
+                        yield StreamEvent(event=parsed[0], data=parsed[1])
+                else:
+                    frame.append(line)
+            parsed = _core.parse_sse(frame)
+            if parsed:
+                yield StreamEvent(event=parsed[0], data=parsed[1])
+
+
+class _SyncJobs(_JobsBase):
+    def wait(
+        self,
+        job: Job | str,
+        *,
+        timeout: float = DEFAULT_JOB_TIMEOUT,
+        poll_interval: float = 1.0,
+        max_poll_interval: float = 15.0,
+        on_update: Callable[[Job], None] | None = None,
+        raise_on_failure: bool = True,
+        **opts: _Opts,
+    ) -> Job:
+        """Poll until the job is terminal, with growing delays (1s up to 15s by default).
+
+        Raises :class:`JobTimeoutError` after ``timeout`` seconds (the job keeps running) and,
+        unless ``raise_on_failure=False``, :class:`JobFailedError` for failed or cancelled jobs.
+        """
+        job_id = job if isinstance(job, str) else job.id
+        deadline = time.monotonic() + timeout
+        current = self.get(job_id, **opts)
+        delays = _poll_delays(poll_interval, max_poll_interval)
+        while not current.is_terminal:
+            if on_update:
+                on_update(current)
+            if time.monotonic() + (delay := next(delays)) > deadline:
+                raise JobTimeoutError(f"job {job_id} still {current.state} after {timeout}s", job=current)
+            time.sleep(delay)
+            current = self.get(job_id, **opts)
+        if on_update:
+            on_update(current)
+        return _check_terminal(current) if raise_on_failure else current
+
+
+class _SyncDashboards(_Dashboards):
+    def render(self, dashboard_id: str, *, timeout: float = 300.0, **opts: _Opts) -> bytes:
+        """Render a dashboard and return PNG bytes (starts the job, waits, downloads)."""
+        job = self._c.jobs.wait(self.image(dashboard_id, **opts), timeout=timeout, **opts)
+        return self._c.download((job.result or {})["image_url"])
+
+
+class _SyncPredictions(_Predictions):
+    def run(self, question: str, *, timeout: float = DEFAULT_JOB_TIMEOUT, **kw: Any) -> Job:
+        """Create a prediction and wait for it. Returns the finished :class:`Job`."""
+        wait_keys = {"poll_interval", "max_poll_interval", "on_update"}
+        wait_kw = {k: kw.pop(k) for k in list(kw) if k in wait_keys}
+        return self._c.jobs.wait(self.create(question, **kw), timeout=timeout, **wait_kw)
+
+
+class Mitra:
+    """Synchronous client.
+
+    Args:
+        api_key: Workspace API key (``mtk_...``). Falls back to ``MATIH_API_KEY``.
+        access_token: OAuth access token (``mto_...``). Use instead of ``api_key``.
+        base_url: Defaults to ``https://workspace.matih.ai/api/v1`` (or ``MATIH_BASE_URL``).
+        workspace_id: Sent as ``X-Matih-Workspace`` (OAuth tokens; API keys are pinned).
+        language: Default BCP-47 language such as ``hi-IN``, sent as ``Accept-Language``.
+        timeout: Per-request timeout in seconds.
+        max_retries: Retries for 429, and for 5xx or network errors on safe calls.
+        http_client: Bring your own ``httpx.Client`` (proxies, tests).
+
+    Every endpoint method also accepts ``workspace_id=``, ``language=`` and, for calls that
+    cost credits, ``idempotency_key=``.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        access_token: str | None = None,
+        base_url: str | None = None,
+        workspace_id: str | None = None,
+        language: str | None = None,
+        timeout: float = 60.0,
+        max_retries: int = 2,
+        http_client: httpx.Client | None = None,
+    ) -> None:
+        settings = _core.Settings(
+            api_key=api_key,
+            access_token=access_token,
+            base_url=base_url,
+            workspace_id=workspace_id,
+            language=language,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        self._owns_http = http_client is None
+        self._http = http_client or httpx.Client()
+        core = _SyncCore(settings, self._http)
+        core.download = self._download  # type: ignore[attr-defined]
+        self._core = core
+        self.workspaces = _Workspaces(core)
+        self.sources = _Sources(core)
+        self.files = _Files(core)
+        self.gems = _Gems(core)
+        self.dashboards = _SyncDashboards(core)
+        self.predictions = _SyncPredictions(core)
+        self.jobs = _SyncJobs(core)
+        self.webhooks = _Webhooks(core)
+        self.conversations = _Conversations(core)
+        core.jobs = self.jobs  # type: ignore[attr-defined]
+        self.settings = settings
+
+    def __enter__(self) -> Mitra:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._owns_http:
+            self._http.close()
+
+    def ask(
+        self,
+        question: str,
+        *,
+        conversation_id: str | None = None,
+        source_id: str | None = None,
+        language: str | None = None,
+        **opts: _Opts,
+    ) -> Answer:
+        """Ask a question. Reuse ``answer.conversation_id`` for follow-ups."""
+        return self._core.request(
+            "POST",
+            "/ask",
+            json_body=_ask_body(question, conversation_id, source_id, language, False),
+            parse=Answer.model_validate,
+            idempotent=True,
+            language=language,
+            **opts,
+        )
+
+    def ask_stream(
+        self,
+        question: str,
+        *,
+        conversation_id: str | None = None,
+        source_id: str | None = None,
+        language: str | None = None,
+        **opts: _Opts,
+    ) -> Iterator[StreamEvent]:
+        """Ask and iterate server-sent events: ``started``, ``progress``, ``answer``, ``error``."""
+        return self._core.stream(
+            json_body=_ask_body(question, conversation_id, source_id, language, True),
+            idempotent=True,
+            language=language,
+            **opts,
+        )
+
+    def ask_audio(
+        self,
+        file: str | os.PathLike[str] | bytes | BinaryIO,
+        *,
+        filename: str | None = None,
+        content_type: str | None = None,
+        conversation_id: str | None = None,
+        source_id: str | None = None,
+        **opts: _Opts,
+    ) -> Answer:
+        """Ask by voice note (``POST /ask/audio``). The language is detected from speech."""
+        data = {k: v for k, v in {"conversation_id": conversation_id, "source_id": source_id}.items() if v}
+        return self._core.request(
+            "POST",
+            "/ask/audio",
+            files={"file": _file_part(file, filename, content_type)},
+            data=data,
+            parse=Answer.model_validate,
+            idempotent=True,
+            **opts,
+        )
+
+    def _download(self, url: str) -> bytes:
+        """Fetch a signed ``image_url``. No credential is sent."""
+        response = self._http.get(
+            urljoin(self._core.settings.base_url + "/", url), timeout=self._core.settings.timeout,
+            follow_redirects=True,
+        )
+        _core.raise_for_response(response)
+        return response.content
+
+    def download_image(self, image_url: str) -> bytes:
+        """Download PNG bytes from a short-lived signed ``image_url`` (valid ~15 minutes)."""
+        return self._download(image_url)
+
+
+# -------------------------------------------------------------------------- async
+
+
+class _AsyncCore:
+    def __init__(self, settings: _core.Settings, http: httpx.AsyncClient) -> None:
+        self.settings = settings
+        self.http = http
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        parse: Callable[[Any], Any] | None = None,
+        raw: bool = False,
+        **prep: Any,
+    ) -> Any:
+        kwargs = _core.prepare(self.settings, method, path, **prep)
+        attempt = 0
+        while True:
+            response: httpx.Response | None = None
+            try:
+                response = await self.http.request(**kwargs, timeout=self.settings.timeout)
+            except httpx.TransportError as exc:
+                if not _core.should_retry(kwargs, None, attempt, self.settings.max_retries):
+                    raise MitraError(f"network error: {exc}") from exc
+            if response is not None:
+                if response.status_code < 400:
+                    return _core.decode(response, parse, raw)
+                if response.status_code not in _core.RETRY_STATUSES or not _core.should_retry(
+                    kwargs, response.status_code, attempt, self.settings.max_retries
+                ):
+                    _core.raise_for_response(response)
+            await asyncio.sleep(_core.retry_delay(response, attempt))
+            attempt += 1
+
+    async def stream(self, **prep: Any) -> AsyncIterator[StreamEvent]:
+        kwargs = _core.prepare(self.settings, "POST", "/ask", accept="text/event-stream", **prep)
+        async with self.http.stream(
+            "POST",
+            **{k: v for k, v in kwargs.items() if k != "method"},
+            timeout=httpx.Timeout(self.settings.timeout, read=None),
+        ) as response:
+            if response.status_code >= 400:
+                await response.aread()
+                _core.raise_for_response(response)
+            frame: list[str] = []
+            async for line in response.aiter_lines():
+                if line == "":
+                    parsed = _core.parse_sse(frame)
+                    frame = []
+                    if parsed:
+                        yield StreamEvent(event=parsed[0], data=parsed[1])
+                else:
+                    frame.append(line)
+            parsed = _core.parse_sse(frame)
+            if parsed:
+                yield StreamEvent(event=parsed[0], data=parsed[1])
+
+
+class _AsyncJobs(_JobsBase):
+    async def wait(
+        self,
+        job: Job | str,
+        *,
+        timeout: float = DEFAULT_JOB_TIMEOUT,
+        poll_interval: float = 1.0,
+        max_poll_interval: float = 15.0,
+        on_update: Callable[[Job], Any] | None = None,
+        raise_on_failure: bool = True,
+        **opts: _Opts,
+    ) -> Job:
+        """Async version of :meth:`Mitra.jobs.wait`. ``on_update`` may be a plain function."""
+        job_id = job if isinstance(job, str) else job.id
+        deadline = time.monotonic() + timeout
+        current = await self.get(job_id, **opts)
+        delays = _poll_delays(poll_interval, max_poll_interval)
+        while not current.is_terminal:
+            if on_update:
+                result = on_update(current)
+                if asyncio.iscoroutine(result):
+                    await result
+            if time.monotonic() + (delay := next(delays)) > deadline:
+                raise JobTimeoutError(f"job {job_id} still {current.state} after {timeout}s", job=current)
+            await asyncio.sleep(delay)
+            current = await self.get(job_id, **opts)
+        if on_update:
+            result = on_update(current)
+            if asyncio.iscoroutine(result):
+                await result
+        return _check_terminal(current) if raise_on_failure else current
+
+
+class _AsyncDashboards(_Dashboards):
+    async def render(self, dashboard_id: str, *, timeout: float = 300.0, **opts: _Opts) -> bytes:
+        """Render a dashboard and return PNG bytes (starts the job, waits, downloads)."""
+        job = await self._c.jobs.wait(await self.image(dashboard_id, **opts), timeout=timeout, **opts)
+        return await self._c.download((job.result or {})["image_url"])
+
+
+class _AsyncPredictions(_Predictions):
+    async def run(self, question: str, *, timeout: float = DEFAULT_JOB_TIMEOUT, **kw: Any) -> Job:
+        """Create a prediction and wait for it. Returns the finished :class:`Job`."""
+        wait_keys = {"poll_interval", "max_poll_interval", "on_update"}
+        wait_kw = {k: kw.pop(k) for k in list(kw) if k in wait_keys}
+        return await self._c.jobs.wait(await self.create(question, **kw), timeout=timeout, **wait_kw)
+
+
+class AsyncMitra:
+    """Asynchronous client with the same surface as :class:`Mitra`; every call is awaitable.
+
+    ``ask_stream`` is used with ``async for``.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        access_token: str | None = None,
+        base_url: str | None = None,
+        workspace_id: str | None = None,
+        language: str | None = None,
+        timeout: float = 60.0,
+        max_retries: int = 2,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        settings = _core.Settings(
+            api_key=api_key,
+            access_token=access_token,
+            base_url=base_url,
+            workspace_id=workspace_id,
+            language=language,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        self._owns_http = http_client is None
+        self._http = http_client or httpx.AsyncClient()
+        core = _AsyncCore(settings, self._http)
+        core.download = self._download  # type: ignore[attr-defined]
+        self._core = core
+        self.workspaces = _Workspaces(core)
+        self.sources = _Sources(core)
+        self.files = _Files(core)
+        self.gems = _Gems(core)
+        self.dashboards = _AsyncDashboards(core)
+        self.predictions = _AsyncPredictions(core)
+        self.jobs = _AsyncJobs(core)
+        self.webhooks = _Webhooks(core)
+        self.conversations = _Conversations(core)
+        core.jobs = self.jobs  # type: ignore[attr-defined]
+        self.settings = settings
+
+    async def __aenter__(self) -> AsyncMitra:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._owns_http:
+            await self._http.aclose()
+
+    async def ask(
+        self,
+        question: str,
+        *,
+        conversation_id: str | None = None,
+        source_id: str | None = None,
+        language: str | None = None,
+        **opts: _Opts,
+    ) -> Answer:
+        return await self._core.request(
+            "POST",
+            "/ask",
+            json_body=_ask_body(question, conversation_id, source_id, language, False),
+            parse=Answer.model_validate,
+            idempotent=True,
+            language=language,
+            **opts,
+        )
+
+    def ask_stream(
+        self,
+        question: str,
+        *,
+        conversation_id: str | None = None,
+        source_id: str | None = None,
+        language: str | None = None,
+        **opts: _Opts,
+    ) -> AsyncIterator[StreamEvent]:
+        return self._core.stream(
+            json_body=_ask_body(question, conversation_id, source_id, language, True),
+            idempotent=True,
+            language=language,
+            **opts,
+        )
+
+    async def ask_audio(
+        self,
+        file: str | os.PathLike[str] | bytes | BinaryIO,
+        *,
+        filename: str | None = None,
+        content_type: str | None = None,
+        conversation_id: str | None = None,
+        source_id: str | None = None,
+        **opts: _Opts,
+    ) -> Answer:
+        data = {k: v for k, v in {"conversation_id": conversation_id, "source_id": source_id}.items() if v}
+        return await self._core.request(
+            "POST",
+            "/ask/audio",
+            files={"file": _file_part(file, filename, content_type)},
+            data=data,
+            parse=Answer.model_validate,
+            idempotent=True,
+            **opts,
+        )
+
+    async def _download(self, url: str) -> bytes:
+        response = await self._http.get(
+            urljoin(self._core.settings.base_url + "/", url), timeout=self._core.settings.timeout,
+            follow_redirects=True,
+        )
+        _core.raise_for_response(response)
+        return response.content
+
+    async def download_image(self, image_url: str) -> bytes:
+        """Download PNG bytes from a short-lived signed ``image_url`` (valid ~15 minutes)."""
+        return await self._download(image_url)

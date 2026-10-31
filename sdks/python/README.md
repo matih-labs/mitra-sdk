@@ -1,3 +1,149 @@
-# Python SDK
+# mitra-sdk (Python)
 
-Pre-release: populated once `/api/v1` ships. See the top-level README.
+Python client for the Matih public API. Sync (`Mitra`) and async (`AsyncMitra`) clients on
+[httpx](https://www.python-httpx.org/), pydantic v2 models for the main response shapes, SSE
+streaming, background-job polling and webhook signature verification.
+
+> Pre-release: the package is not on PyPI until `/api/v1` is live. Install from a checkout with
+> `pip install -e sdks/python`.
+
+```bash
+pip install mitra-sdk        # once released
+```
+
+Python 3.10+. The package imports as `mitra`.
+
+## Authenticate
+
+```python
+from mitra import Mitra
+
+client = Mitra(api_key="mtk_...")            # or set MATIH_API_KEY
+client = Mitra(access_token="mto_...", workspace_id="ws_123")  # OAuth token
+```
+
+API keys are pinned to one workspace. OAuth tokens pick a workspace per client with
+`workspace_id=` (sent as `X-Matih-Workspace`) or per call, or set a default with
+`client.workspaces.use(workspace_id)`. Keep keys in environment variables, never in source.
+
+## Ask
+
+```python
+answer = client.ask("What were last month's sales by region?", language="en-IN")
+
+if answer.status == "answered":
+    print(answer.answer)
+    for row in answer.result.rows:
+        print(row)
+    if answer.image_url:
+        open("chart.png", "wb").write(client.download_image(answer.image_url))
+elif answer.status == "clarification":
+    print(answer.clarification.question, answer.clarification.options)
+    # reply in the same conversation
+    answer = client.ask(answer.clarification.options[0], conversation_id=answer.conversation_id)
+
+follow_up = client.ask(answer.follow_ups[0], conversation_id=answer.conversation_id)
+```
+
+Questions may be in any of 22 Indian languages and are auto-detected; pass `language="hi-IN"` to
+force the response language. Data values, column names and figures are never translated.
+
+Voice notes: `client.ask_audio("note.ogg")`.
+
+### Streaming
+
+```python
+for event in client.ask_stream("Top 5 products by revenue"):
+    if event.event == "progress":
+        print("...", event.data)
+    elif event.event == "answer":
+        answer = event.as_answer()
+    elif event.event == "error":
+        raise RuntimeError(event.data)
+```
+
+## Gems, dashboards, forecasts
+
+```python
+gems = client.gems.list(source_id="src_1")
+png = client.gems.image(gems.gems[0].id)                  # bytes
+
+job = client.gems.generate("src_1")                        # 202 Job
+job = client.jobs.wait(job)                                # polls with backoff
+
+dashboards = client.dashboards.list()
+png = client.dashboards.render(dashboards.dashboards[0].id)   # job + wait + download
+
+job = client.predictions.run("Forecast next quarter's revenue", source_id="src_1")
+print(job.result["answer"], job.result.get("attachments"))
+```
+
+`jobs.wait(job, timeout=1860, poll_interval=1.0, max_poll_interval=15.0, on_update=fn)` raises
+`JobTimeoutError` (the job keeps running) or `JobFailedError` (failed or cancelled). Predictions
+can take up to 30 minutes. Calls that cost credits send an `Idempotency-Key` automatically and
+reuse it across retries, so a retry is never charged twice. Pass `idempotency_key=` to control it.
+
+## Sources and files
+
+```python
+client.sources.list()
+client.sources.connectors()
+client.sources.test({"type": "postgres", "host": "...", "database": "..."})
+client.sources.create({...}, activate=True)               # admin key with sources:write
+
+f = client.files.upload("sales.csv")                      # CSV or Excel
+client.files.get(f.id)
+```
+
+## Webhooks
+
+```python
+hook = client.webhooks.create("https://example.com/hooks/matih", ["prediction.completed"])
+print(hook.secret)   # shown once
+
+# In your web handler, with the RAW request body:
+from mitra import verify_webhook, WebhookVerificationError
+try:
+    verify_webhook(secret, request.headers["Matih-Signature"], raw_body)  # constant-time
+except WebhookVerificationError:
+    return 400
+```
+
+## Async
+
+```python
+import asyncio
+from mitra import AsyncMitra
+
+async def main():
+    async with AsyncMitra(api_key="mtk_...") as client:
+        answer = await client.ask("How many orders today?")
+        async for event in client.ask_stream("Top customers"):
+            print(event.event)
+
+asyncio.run(main())
+```
+
+## Errors
+
+All API errors derive from `MitraError` with `.status`, `.category`, `.code`, `.request_id` and
+`.body`. Subclasses: `AuthError` (401), `PermissionDeniedError` (403: `scope`, `workspace_role`,
+`source_access`), `CreditsError` (402: `credits`, `member_cap`), `BusyError` (409),
+`RateLimitError` (429, `.retry_after`), plus `JobFailedError`, `JobTimeoutError`. 429 is retried
+automatically (honouring `Retry-After`) up to `max_retries` (default 2), as are 5xx and network
+errors on GETs and on calls with an idempotency key.
+
+## Models
+
+`mitra.models` holds pydantic models for the main shapes (`Answer`, `Job`, `Gem`, `Workspace`, ...).
+They accept unknown fields, so new server fields never break old clients. See
+[`scripts/README.md`](scripts/README.md) for generating models from the OpenAPI spec.
+
+## Develop
+
+```bash
+pip install -e "sdks/python[dev]"
+pytest && ruff check .
+```
+
+License: Apache-2.0.
