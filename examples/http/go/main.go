@@ -7,14 +7,14 @@
 //	go run . -skip-predict
 //	go run . -background        (predict without Prefer: wait, start a job and poll it)
 //	go run . -upload ./sales.csv
-//	go run . -invite teammate@example.com -role ROLE     (admin action, never runs by default)
+//	go run . -invite teammate@example.com -role user     (admin action, never runs by default)
 //	MATIH_WEBHOOK_SECRET=whsec_... go run . serve-webhook
 //
 // Environment:
 //
 //	MATIH_API_KEY       required. Create one under Settings › API & MCP in Matih.
 //	MATIH_BASE_URL      optional. Default https://workspace.matih.ai ("/api/v1" is appended).
-//	MATIH_ON_DUPLICATE  optional. Passed as the on_duplicate form field of the file upload.
+//	MATIH_ON_DUPLICATE  optional. The on_duplicate form field of the file upload: ask (default) or keep_both.
 //
 // Teaching example. Do not commit your API key.
 package main
@@ -111,8 +111,8 @@ func (c *client) do(method, path string, body []byte, contentType, idempotencyKe
 }
 
 // exchange sends one request and returns the status code of a 2xx answer.
-// On a 429 it honours Retry-After once and retries with the same Idempotency-Key,
-// so a credit-costing call is never charged twice.
+// On a 429 it honours Retry-After once and retries with the same Idempotency-Key
+// (the server honours it on /ask and /predictions).
 // prefer is an optional RFC 7240 Prefer header value: "wait=30" or "respond-async".
 // A 2xx body is decoded into out when out is not nil.
 func (c *client) exchange(method, path string, body []byte, contentType, idempotencyKey, prefer string, out any) (int, error) {
@@ -363,9 +363,10 @@ func (c *client) askAsync(question string) error {
 const waitSeconds = 30
 
 // runWithWait works on POST /gems/generate, /predictions and /dashboards/{id}/image. The
-// server answers 200 or 201 when the work finished within N seconds, otherwise 202 with a
-// Job. Either way it returns the result object; on 202 it falls back to polling the job.
-// If a finished answer carries a Job (it has a "state"), its result field is used.
+// server answers 200 with the finished Job when the work finished within N seconds,
+// otherwise 202 with the Job as it stands. Either way it returns the result object; on
+// 202 it falls back to polling the job. A finished answer is a Job (it has a "state"),
+// and its result field is used.
 func (c *client) runWithWait(path string, in any, idempotencyKey string,
 	pollFirst, pollMax, pollTimeout time.Duration) (map[string]any, error) {
 	var body []byte
@@ -410,7 +411,8 @@ func (c *client) runWithWait(path string, in any, idempotencyKey string,
 
 // dashboardImage lists dashboards and renders the first one, sync-with-fallback: wait=N,
 // and if the job is still running, poll GET /jobs/{id} with a growing delay.
-// image_url is a signed URL valid for about 15 minutes that needs no Authorization header.
+// image_url is a public, unguessable URL that expires after 15 minutes and needs no
+// Authorization header.
 func (c *client) dashboardImage() error {
 	var list struct {
 		Dashboards []struct {
@@ -441,8 +443,9 @@ func (c *client) dashboardImage() error {
 // (4) Predict
 // ---------------------------------------------------------------------------
 
-// A prediction can run for up to 30 minutes. Poll every 5 to 10 seconds.
-// Webhooks (prediction.completed) avoid polling.
+// A prediction usually takes one to five minutes; the server gives up after 30.
+// Poll every 5 to 10 seconds. Webhooks (prediction.completed) avoid polling.
+// A finished prediction's result is {conversation_id, answer}; answer is a string.
 
 // predict is sync-with-fallback: wait=N, then poll on 202.
 func (c *client) predict(question string) error {
@@ -479,16 +482,7 @@ func (c *client) predictBackground(question string) error {
 
 func printPrediction(result map[string]any) {
 	fmt.Printf("answer: %s\n", str(result, "answer"))
-	if attachments, ok := result["attachments"].([]any); ok {
-		for _, item := range attachments {
-			if m, ok := item.(map[string]any); ok {
-				fmt.Printf("  attachment: %s\n", str(m, "type"))
-			}
-		}
-	}
-	if img := str(result, "image_url"); img != "" {
-		fmt.Printf("image_url: %s\n", img)
-	}
+	fmt.Printf("conversation_id: %s (pass it to POST /predictions to continue)\n", str(result, "conversation_id"))
 }
 
 // ---------------------------------------------------------------------------
@@ -498,18 +492,18 @@ func printPrediction(result map[string]any) {
 func (c *client) listSources() error {
 	var out struct {
 		Sources []struct {
-			ID     string `json:"id"`
-			Name   string `json:"name"`
-			Type   string `json:"type"`
-			Status string `json:"status"`
-			Active bool   `json:"active"`
+			ID            string `json:"id"`
+			Name          string `json:"name"`
+			ConnectorType string `json:"connector_type"`
+			State         string `json:"state"`
+			IsActive      bool   `json:"is_active"`
 		} `json:"sources"`
 	}
 	if err := c.getJSON("/sources", &out); err != nil {
 		return err
 	}
 	for _, s := range out.Sources {
-		fmt.Printf("  %s  %s  type=%s  status=%s  active=%t\n", s.ID, s.Name, s.Type, s.Status, s.Active)
+		fmt.Printf("  %s  %s  connector_type=%s  state=%s  active=%t\n", s.ID, s.Name, s.ConnectorType, s.State, s.IsActive)
 	}
 	if len(out.Sources) == 0 {
 		fmt.Println("no sources yet")
@@ -535,8 +529,8 @@ func contentTypeFor(path string) string {
 	return "application/octet-stream"
 }
 
-// uploadFile needs the files:write scope. The optional on_duplicate field says what
-// to do when the same file was uploaded before.
+// uploadFile needs the files:write scope. The optional on_duplicate field is "ask" (the
+// default: an identical file waits for a decision) or "keep_both".
 func (c *client) uploadFile(path string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -564,26 +558,35 @@ func (c *client) uploadFile(path string) error {
 		return err
 	}
 
+	// A file is a File, not a Job. "Prefer: wait=30" (up to 120) holds the request until
+	// it is ready; if processing is still running the answer is 202.
 	var file map[string]any
-	if err := c.do(http.MethodPost, "/files", buf.Bytes(), mw.FormDataContentType(), "", &file); err != nil {
+	if _, err := c.exchange(http.MethodPost, "/files", buf.Bytes(), mw.FormDataContentType(), "",
+		"wait=30", &file); err != nil {
 		return err
 	}
-	fmt.Printf("uploaded: %s status=%s\n", str(file, "id"), str(file, "status"))
+	fmt.Printf("uploaded: %s status=%s ready=%v\n", str(file, "id"), str(file, "status"), file["ready"])
 
-	// Processing is asynchronous. Needs the files:read scope to follow it.
+	// Follow it with GET /files/{id} (needs files:read) until Ask can use it, it needs
+	// attention or failed, or it waits for a duplicate decision.
+	settled := func(f map[string]any) bool {
+		status := str(f, "status")
+		return f["ready"] == true || f["decision_required"] == true ||
+			status == "needs_attention" || status == "failed"
+	}
 	id := str(file, "id")
-	for i := 0; i < 40 && str(file, "status") == "processing"; i++ {
+	for i := 0; i < 40 && !settled(file); i++ {
 		time.Sleep(3 * time.Second)
 		var latest map[string]any
 		if err := c.getJSON("/files/"+url.PathEscape(id), &latest); err != nil {
 			return err
 		}
 		file = latest
-		fmt.Printf("  status=%s\n", str(file, "status"))
+		fmt.Printf("  status=%s ready=%v\n", str(file, "status"), file["ready"])
 	}
 	printJSON(file)
 	if file["decision_required"] == true {
-		fmt.Println("the file needs a decision (duplicate handling); see POST /files/{id}/duplicate")
+		fmt.Printf("the file is a duplicate and waits for a decision (%v); see POST /files/{id}/duplicate\n", file["decision_options"])
 	}
 	return nil
 }
@@ -592,7 +595,7 @@ func (c *client) uploadFile(path string) error {
 // (7) Invite a member (admin action, members:manage)
 // ---------------------------------------------------------------------------
 
-// inviteMember only runs when you pass -invite. Valid role values come from GET /members.
+// inviteMember only runs when you pass -invite. role is viewer, user or admin (never owner).
 func (c *client) inviteMember(target, role string) error {
 	key := "phone"
 	if strings.Contains(target, "@") {
@@ -642,8 +645,8 @@ func main() {
 
 	uploadPath := flag.String("upload", "", "path of a CSV or Excel file to upload")
 	inviteTarget := flag.String("invite", "", "email or phone to invite (admin action)")
-	inviteRole := flag.String("role", "", "role for -invite (values come from GET /members)")
-	skipPredict := flag.Bool("skip-predict", false, "skip the prediction (it can take up to 30 minutes)")
+	inviteRole := flag.String("role", "user", "role for -invite: viewer, user or admin")
+	skipPredict := flag.Bool("skip-predict", false, "skip the prediction (it costs credits and can take minutes)")
 	background := flag.Bool("background", false, "predict without Prefer: wait; start a job and poll it")
 	flag.Parse()
 
@@ -651,8 +654,8 @@ func main() {
 	if apiKey == "" {
 		fatal("MATIH_API_KEY is required")
 	}
-	if *inviteTarget != "" && *inviteRole == "" {
-		fatal("-invite needs -role ROLE (valid values come from GET /members)")
+	if *inviteTarget != "" && *inviteRole != "viewer" && *inviteRole != "user" && *inviteRole != "admin" {
+		fatal("-role must be viewer, user or admin")
 	}
 
 	c := &client{base: baseURL(), key: apiKey, http: &http.Client{Timeout: 2 * time.Minute}}
