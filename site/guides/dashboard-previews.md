@@ -13,7 +13,7 @@ export BASE=https://workspace.matih.ai/api/v1
 
 ## 1. Find the dashboard
 
-`GET /dashboards` returns `{"dashboards": [{"id", "title", "updated_at"}]}`. Match the user's wording to `title` and, when several are close, list them and ask.
+`GET /dashboards` returns `{"dashboards": [{"id", "title", "source_id", "status", "revision", "widget_count", "created_at", "updated_at"}]}`, only the dashboards the member can see. `status` is `draft` or `saved`. `GET /dashboards/{id}` adds the `widgets` (`id`, `title`, `visual`, `question`). Match the user's wording to `title` and, when several are close, list them and ask.
 
 === "curl"
 
@@ -46,24 +46,24 @@ export BASE=https://workspace.matih.ai/api/v1
 `POST /dashboards/{id}/image` is asynchronous by default: it answers `202` with a Job (`kind: "dashboard_image"`). When the job succeeds its `result` is:
 
 ```json
-{"image_url": "https://workspace.matih.ai/api/v1/media/<token>.png", "width": 1280, "height": 900}
+{"image_url": "https://workspace.matih.ai/api/v1/media/<token>.png", "width": 1600, "height": 900}
 ```
 
-Send `Prefer: wait=20` to let the server hold the request for up to 20 seconds and answer inline if the render finishes in time; `Preference-Applied` in the response says which mode ran. Either way you may still get a Job that is not finished, so be ready to poll. See [Sync and async](../concepts/sync-async.md) and [Jobs](../concepts/jobs.md).
+The body is optional: `{"width": 1600}` (400 to 3200, default 1600). A dashboard drawn in the last ten minutes at the same width is reused. Send `Prefer: wait=20` (or `?wait=20`, up to 60) to let the server hold the request and answer `200` with the finished Job if the render completes in time; `Preference-Applied` in the response says which mode ran. Either way you may still get a Job that is not finished, so be ready to poll. See [Sync and async](../concepts/sync-async.md) and [Jobs](../concepts/jobs.md).
 
 The SDKs hide the loop. Python `dashboards.render` starts the job, waits and downloads the PNG; TypeScript `dashboards.imageBytes` does the same.
 
 === "curl"
 
     ```bash
-    DASHBOARD_ID=dash_...
+    DASHBOARD_ID=dsh_...
 
     # Start, and ask the server to wait up to 20 s for the result
-    curl -s -H "Authorization: Bearer $MATIH_API_KEY" -H "Idempotency-Key: $(uuidgen)" \
+    curl -s -H "Authorization: Bearer $MATIH_API_KEY" \
       -H "Prefer: wait=20" -X POST $BASE/dashboards/$DASHBOARD_ID/image
 
     # If the state is not "succeeded", poll the job id it returned
-    JOB_ID=job_...
+    JOB_ID=9b1d4c0e7a2f4c1e8d3b5a6f70e1c2d3   # the id from the 202 body
     while :; do
       JOB=$(curl -s -H "Authorization: Bearer $MATIH_API_KEY" $BASE/jobs/$JOB_ID)
       STATE=$(echo "$JOB" | jq -r .state)
@@ -71,7 +71,7 @@ The SDKs hide the loop. Python `dashboards.render` starts the job, waits and dow
       [ "$STATE" = failed ] || [ "$STATE" = cancelled ] && { echo "$JOB" | jq .error >&2; exit 1; }
       sleep 3
     done
-    curl -s -o dashboard.png "$URL"      # signed URL: no auth header
+    curl -s -o dashboard.png "$URL"      # no auth header needed
     ```
 
 === "Python"
@@ -132,7 +132,7 @@ The SDKs hide the loop. Python `dashboards.render` starts the job, waits and dow
     }
     if (job.state !== "succeeded") throw new Error(JSON.stringify(job.error));
 
-    const png = await fetch(job.result.image_url);       // signed URL: no auth header
+    const png = await fetch(job.result.image_url);       // no auth header needed
     await writeFile("dashboard.png", Buffer.from(await png.arrayBuffer()));
     ```
 
@@ -255,7 +255,7 @@ The SDKs hide the loop. Python `dashboards.render` starts the job, waits and dow
 
 ## Or fetch the PNG directly
 
-`GET /dashboards/{id}/image.png` with your key redirects to a fresh image when one is cached and otherwise answers `202` with a Job. Follow redirects:
+`GET /dashboards/{id}/image.png` with your key answers `303` to the image when one was drawn recently and otherwise answers `202` with a Job. Follow redirects:
 
 ```bash
 curl -sL -H "Authorization: Bearer $MATIH_API_KEY" -o dashboard.png $BASE/dashboards/$DASHBOARD_ID/image.png
@@ -264,7 +264,7 @@ head -c 200 dashboard.png   # if this is JSON, a render job was started: poll it
 
 ## Short-lived links
 
-`image_url` is a signed URL under `/api/v1/media/{token}.png`. It needs no `Authorization` header and expires after **15 minutes**. That makes it safe to hand to a chat platform that fetches the image itself (WhatsApp, Teams, Slack unfurls), but treat it like a secret for those 15 minutes: anyone holding it can see the picture. Download or post it immediately; request a new render when it expires. See [Images](../concepts/images.md).
+`image_url` is an unguessable URL under `/api/v1/media/{token}.png`. It needs no `Authorization` header and expires after **15 minutes**. That makes it safe to hand to a chat platform that fetches the image itself (WhatsApp, Teams, Slack unfurls), but treat it like a secret for those 15 minutes: anyone holding it can see the picture. Download or post it immediately; request a new render when it expires. See [Images](../concepts/images.md).
 
 ## Notify when ready
 
@@ -272,7 +272,7 @@ For renders you start and walk away from, register a `dashboard_image.ready` [we
 
 ## Tips
 
-- The picture is a snapshot. State when it was taken (`updated_at` or the job's `updated_at`) if people decide from it.
+- The picture is a snapshot. State when it was taken (the job's `updated_at`) if people decide from it.
 - If someone wants a number from the dashboard, ask the underlying question with `POST /ask` instead of reading it off the picture.
 - A bot serving many people should cache the PNG for a few minutes per dashboard instead of rendering on every message.
 - Rendering is free of credits; it still counts against [rate limits](../concepts/rate-limits.md).

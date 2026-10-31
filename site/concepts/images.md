@@ -2,7 +2,7 @@
 
 Answers, Gems and dashboards come with pictures. Matih serves them as PNG.
 
-## Signed image URLs
+## Image URLs
 
 `image_url` in an Answer, a Gem or a finished dashboard-image job looks like:
 
@@ -10,10 +10,10 @@ Answers, Gems and dashboards come with pictures. Matih serves them as PNG.
 https://workspace.matih.ai/api/v1/media/<token>.png
 ```
 
-- **No authorization header needed.** The token in the URL is the authorization, so you can pass it
+- **No authorization header needed.** The token in the URL (48 hex characters, unguessable) is the authorization, so you can pass it
   straight to Slack, WhatsApp, an email or an `<img>` tag.
-- **Short-lived: 15 minutes.** After that the URL returns an error. Fetch the Gem or the job again to
-  get a fresh URL.
+- **Short-lived: 15 minutes.** After that the URL answers `404`. Fetch the Gem or the job again to
+  get a fresh URL. The picture is served with `Cache-Control: no-store`, so fetch it straight away or pass the URL to a viewer; do not store the URL.
 - Treat the URL as a secret while it is valid: anyone who has it can view that picture.
 
 ```bash
@@ -27,8 +27,8 @@ When you would rather not hand out a URL, fetch the bytes with your credential:
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/v1/gems/{id}/image.png` | The Gem's picture |
-| `GET /api/v1/dashboards/{id}/image.png` | The dashboard picture; redirects to a fresh image when one is cached, else `202` with a render Job |
+| `GET /api/v1/gems/{id}/image.png` | The Gem's picture; `404` when it has nothing worth drawing |
+| `GET /api/v1/dashboards/{id}/image.png` | The dashboard picture (`?width=` 400 to 3200); `303` to the image when one was drawn in the last ten minutes at that width, else `202` with a render Job |
 
 The SDKs wrap both: `client.gems.image(id)` (Python, TypeScript) returns bytes;
 `client.dashboards.render(id)` (Python) and `client.dashboards.imageBytes(id)` (TypeScript) wait for the render and
