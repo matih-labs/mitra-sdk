@@ -18,7 +18,7 @@ Matih hosts a [Model Context Protocol](https://modelcontextprotocol.io) server s
 |---|---|---|
 | **MCP connector key** (`mtk_...`, kind "MCP connector") | Headless agents, CI, shared team setups. Accepted **only** on `/api/v1/mcp`, never on the REST routes, so a leaked connector key cannot call the rest of the API. | Pinned to the workspace it was made in. |
 | **API key** (`mtk_...`, kind "API key") | Works on MCP as well as all of `/api/v1`. Prefer a connector key if the key is only for an assistant. | Pinned. |
-| **OAuth** (`mto_...`) | Interactive clients. You sign in once in the browser; the client discovers the sign-in from the `401`'s `WWW-Authenticate` header and the well-known metadata, and registers itself ([how OAuth works](../guides/oauth.md)). Acts as you; tokens last 1 hour and renew by refresh, and you approve again after 90 days. Disconnect an app any time under Settings › Connected apps. | The default workspace you pick on the consent screen (else your current one); the `use_workspace` tool changes it, and `X-Matih-Workspace` picks one per request. |
+| **OAuth** (`mto_...`) | Interactive clients. You sign in once in the browser; the client discovers the sign-in from the `401`'s `WWW-Authenticate` header and the well-known metadata, and registers itself ([how OAuth works](../guides/oauth.md)). Acts as you; access tokens last 1 hour and renew by refresh, and you approve again after 90 days at most. Disconnect an app any time under Settings › Connected apps. | The default workspace you pick on the consent screen (else your current one); the `use_workspace` tool changes it, and `X-Matih-Workspace` picks one per request. |
 
 !!! tip "Let the app write the config for you"
     Settings › API & MCP shows ready-to-copy configs for Claude Code, Claude Desktop, Cursor and VS Code, with your workspace's address and the new key filled in, and only the products you enabled. The pages in this section give the same configs by hand.
@@ -28,7 +28,7 @@ Matih hosts a [Model Context Protocol](https://modelcontextprotocol.io) server s
 1. In Matih open **Settings › API & MCP** (owners and admins).
 2. Choose **MCP connector**.
 3. Pick the products the assistant may use. All are on by default: Ask, Data sources, Files, Predictive analytics, Dashboards, Gems, Workspaces, Users & members, Webhooks. Each product with writes has an **Allow changes** switch. Keep it off for a read-only assistant.
-4. Optionally set an expiry (none by default).
+4. Optionally set an expiry (never by default; 30 days, 90 days, 1 year or a date).
 5. Copy the secret now. It is shown once and stored only as a hash.
 
 Keep the key in an environment variable or secret store, never in a committed file. See [Security](../security.md).
@@ -74,7 +74,7 @@ curl -s https://workspace.matih.ai/api/v1/mcp \
   -H "Authorization: Bearer $MATIH_API_KEY" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 ```
 
 List the tools your key sees:

@@ -25,7 +25,7 @@ One tool per operation. Each needs the scope shown, as the matching REST route d
 | `get_job(job_id)` | any of `ask`, `predict`, `gems:generate`, `dashboards:read` | State of a job; when finished, its result and any picture | free |
 | `list_files` | `files:read` | Uploaded files and whether they are read | free |
 
-`?` marks an optional argument.
+`?` marks an optional argument. `ask` and `predict` take a `question` of up to 4000 characters. `invite_member` takes exactly one of `email` or `phone` (with country code, for example `+919876543210`) and a `role` of `viewer`, `user` (the default) or `admin`, never higher than the inviter's own role. Poll `get_job` every 10 to 15 seconds, not faster.
 
 !!! note "File upload is not a tool"
     Files are binary, so upload with `POST /api/v1/files` (multipart) on the REST API ([Upload a file](../guides/upload-file.md)), then check it with `list_files` or `source_status`.
@@ -45,7 +45,7 @@ One tool per operation. Each needs the scope shown, as the matching REST route d
 | Workspaces | `list_workspaces`, `use_workspace` |
 | Users & members | `list_members`, `invite_member` |
 
-An **Allow changes** switch off for a product removes its write scope: for example, with Users & members on but changes off, `list_members` remains and `invite_member` goes. For a read-only analyst assistant, leave changes off everywhere.
+An **Allow changes** switch off for a product removes its write scope. Only two tools sit behind one: with Users & members on but changes off, `list_members` remains and `invite_member` goes; with Gems on but changes off, `list_gems` and `get_gem` remain and `generate_gems` goes. The other write scopes (`sources:write`, `files:write`) have no tool, since uploading and connecting sources is REST only. For a read-only analyst assistant, leave changes off everywhere.
 
 OAuth sign-in through the app's own session carries no credential scopes and sees all tools; the workspace role still decides what runs.
 
