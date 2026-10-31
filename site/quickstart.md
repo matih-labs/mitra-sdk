@@ -4,7 +4,7 @@ Five minutes from nothing to a first answer.
 
 !!! info "You need"
     - A Matih workspace with at least one connected data source or uploaded file.
-    - A workspace **owner or admin** to create the key (members cannot).
+    - A workspace **owner or admin** to create the key (the `user` and `viewer` roles cannot).
 
 ## 1. Create an API key
 
@@ -77,7 +77,7 @@ more than one active source). List your sources with `GET /sources`.
     client = Mitra()
     answer = client.ask("What were last month's sales by region?")
 
-    print(answer.status)          # answered | clarification | empty | error
+    print(answer.status)          # answered | clarification | empty | error | cancelled
     print(answer.answer)
     if answer.result:
         for row in answer.result.rows[:5]:
@@ -261,10 +261,10 @@ The response is an **Answer**:
     "truncated": false
   },
   "sql": "SELECT region, SUM(amount) AS sales FROM orders WHERE ...",
-  "image_url": "https://workspace.matih.ai/api/v1/media/....png",
+  "image_url": "https://workspace.matih.ai/api/v1/media/0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a6978.png",
   "follow_ups": ["Break that down by product"],
-  "conversation_id": "conv_...",
-  "request_id": "req_...",
+  "conversation_id": "5c1d0a4e8b7f4e3a9d2c6b1a0f9e8d7c",
+  "request_id": "b7e1c2d3a4f5469788a9b0c1d2e3f405",
   "language": "en-IN"
 }
 ```
@@ -277,8 +277,9 @@ The response is an **Answer**:
 | `clarification` | Matih needs to know which of a few meanings you intend. `clarification` has `question` and `options`. | Show the options; send the chosen one as the next `question` with the same `conversation_id`. |
 | `empty` | The query ran and matched nothing. | Say so; suggest another range or filter. |
 | `error` | Matih could not answer. `answer` says why in plain words. | Offer to rephrase; log `request_id`. |
+| `cancelled` | The question was cancelled before it finished. | Nothing was delivered or charged; ask again if it was not on purpose. |
 
-An HTTP `200` with `status: "error"` is not an HTTP error.
+An HTTP `200` with `status: "error"` or `"cancelled"` is not an HTTP error, and neither is charged.
 
 ## 4. Ask a follow-up
 
@@ -291,7 +292,7 @@ Reuse `conversation_id` and Matih keeps the context.
       -H "Authorization: Bearer $MATIH_API_KEY" \
       -H "Content-Type: application/json" \
       -H "Idempotency-Key: $(uuidgen)" \
-      -d '{"question": "Now split that by product", "conversation_id": "conv_..."}'
+      -d '{"question": "Now split that by product", "conversation_id": "5c1d0a4e8b7f4e3a9d2c6b1a0f9e8d7c"}'
     ```
 
 === "Python"
