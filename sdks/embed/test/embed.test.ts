@@ -96,8 +96,8 @@ describe("the iframe", () => {
     expect(frame.title).toBe("Matih embed");
     el.setAttribute("height", "480");
     expect(frame.style.height).toBe("480px");
-    el.setAttribute("height", "100vh");
-    expect(frame.style.height).toBe("100vh");
+    el.setAttribute("height", "75%");
+    expect(frame.style.height).toBe("75%");
     el.setAttribute("height", "calc(1px)"); // not a plain length: back to the default
     expect(frame.style.height).toBe("640px");
     el.setAttribute("title", "Sales");
@@ -224,7 +224,10 @@ describe("getting the first token", () => {
     const errors: unknown[] = [];
     el.addEventListener("matih:error", (e) => errors.push(e));
     document.body.appendChild(el);
-    el.getToken = () => "met_late";
+    // Queued before the element's own one-turn grace timer, so it runs first.
+    setTimeout(() => {
+      el.getToken = () => "met_late";
+    }, 0);
     await el.updateComplete;
     expect(errors).toEqual([]);
     expect(new URL(el.frame!.src).hash).toBe("#token=met_late");
@@ -302,6 +305,7 @@ describe("token refresh (matih:token-expiring)", () => {
     const getToken = vi.fn(() => new Promise<string>((resolve) => (release = resolve)));
     const { win } = await mount({ src: SRC, token: "met_old" }, { getToken });
     for (let i = 0; i < 3; i++) fire({ type: "matih:token-expiring", embed: "emt_Ab12" }, ORIGIN, win);
+    await vi.waitFor(() => expect(getToken).toHaveBeenCalled());
     release("met_new");
     await vi.waitFor(() => expect(win.postMessage).toHaveBeenCalled());
     await settle();
@@ -347,6 +351,7 @@ describe("token refresh (matih:token-expiring)", () => {
     const getToken = vi.fn(() => new Promise<string>((resolve) => (release = resolve)));
     const { el, win } = await mount({ src: SRC, token: "met_old" }, { getToken });
     fire({ type: "matih:token-expiring" }, ORIGIN, win);
+    await vi.waitFor(() => expect(getToken).toHaveBeenCalled());
     el.remove();
     release("met_new");
     await settle();

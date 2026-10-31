@@ -49,6 +49,7 @@ Write questions in the user's language. 22 Indian languages are auto-detected, a
 - Jobs: `get_job` (REST `GET /jobs/{id}`), cancel with `POST /jobs/{id}/cancel`.
 - Sources and files: `list_sources`, `source_status`, `list_files` over MCP. Connecting, activating and deleting sources, and uploading files, are REST only. See `references/sources.md`.
 - Members and invitations: `list_members`, `invite_member` over MCP; role changes, removals and revoking invitations are REST only. See `references/members.md`.
+- Embeds (REST only): `POST /embeds` mints a short-lived token to show one dashboard (with row filters) or a Gems feed in the customer's own product, `GET /embeds` lists, `DELETE /embeds/{id}` revokes. Needs `embeds:create` (`embeds:read` to list). It is for developers building an integration, not for answering a user's data question: do not mint tokens unless asked, never print or log the `met_` token, and call it from a backend, not from a browser. See `references/embeds.md`.
 - Webhooks (REST only): `GET/POST/DELETE /webhooks`, `POST /webhooks/{id}/test`, `GET /webhooks/{id}/deliveries`. Needs `webhooks:manage` and an admin. Events: `gems.ready`, `prediction.completed`, `job.completed`, `dashboard_image.ready`.
 
 ## Rules for agents
@@ -96,10 +97,11 @@ More recipes: `examples/curl/README.md` in this repository.
 
 ## References
 
-- `references/auth.md`: API keys, MCP connector keys (created under `Settings › API & MCP`), OAuth, the 13 scopes, headers.
+- `references/auth.md`: API keys, MCP connector keys (created under `Settings › API & MCP`), OAuth, the 15 scopes, headers.
 - `references/workspaces.md`: listing and switching workspaces.
 - `references/asking.md`: clarification, empty and error handling, follow-ups, language and audio, streaming.
 - `references/gems.md`: Gems listing, generation, images.
+- `references/embeds.md`: minting embed tokens for dashboards and Gems.
 - `references/dashboards.md`: dashboards and image rendering.
 - `references/predictions.md`: jobs, polling, cancel, result shapes.
 - `references/members.md`: members, roles, invitations.

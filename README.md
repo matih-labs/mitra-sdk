@@ -19,6 +19,7 @@ MCP setup guide, an agent skill, and examples such as a Slack bot.
   an answer, the data and a chart image
 - Get a dashboard as an image
 - Ask predictive questions (forecasts, what-ifs) as background jobs
+- Embed a dashboard (with per-viewer row filters) or a Gems feed in your own product: mint a short-lived token on your backend, show it with the `<matih-embed>` element
 - Receive signed webhooks when long work finishes
 - Admin work with the right scopes: list and invite members, change roles, connect or remove
   sources, upload and manage files, manage webhooks
@@ -80,11 +81,13 @@ promise-based. See `sdks/python/README.md` and `sdks/typescript/README.md`, and
 | `openapi/` | The OpenAPI 3.1 spec for `/api/v1`, copied here from the server on each release |
 | `sdks/python/` | `mitra-sdk` (import `mitra`): sync and async clients on httpx, pydantic models |
 | `sdks/typescript/` | `@matihlabs/mitra`: typed client on openapi-fetch, SSE streaming |
+| `sdks/embed/` | `@matihlabs/embed`: the `<matih-embed>` web component (iframe, token in the URL fragment, renewal from your backend), no dependencies |
 | `skills/matih/` | Agent skill (`SKILL.md` and references) for using Matih from an AI agent |
 | `mcp/` | Connect Claude, Cursor, VS Code, ChatGPT and others to the hosted MCP endpoint |
 | `examples/http/` | Plain-HTTP examples in Java, Go, JavaScript, C#, PHP and Ruby, with webhook verification |
 | `examples/curl/` | Copy-paste curl recipes for every endpoint |
 | `examples/slack-bot/` | Reference Slack bot (Socket Mode) built on the Python SDK |
+| `examples/embed/` | Mint an embed token with the Node or Python SDK and show it with `<matih-embed>` |
 
 ## Authentication in one paragraph
 
@@ -96,7 +99,7 @@ workspace with the `X-Matih-Workspace` header or `PUT /me/workspace`.
 
 Workspace admins create keys in the Matih app under `Settings › API & MCP`. They choose the
 products the key may use (all on by default): Ask, Data sources, Files, Predictive, Dashboards,
-Gems, Workspaces, Users & members and Webhooks. Keys never expire by default; revoke them in the
+Gems, Embeds, Workspaces, Users & members and Webhooks. Keys never expire by default; revoke them in the
 same screen. There are two kinds: an API key works on all of `/api/v1`, and an MCP connector key
 works only on `/api/v1/mcp` and is refused with 401 elsewhere. Use a connector key for MCP clients.
 
@@ -104,7 +107,7 @@ works only on `/api/v1/mcp` and is refused with 401 elsewhere. Use a connector k
 
 `workspaces:read`, `members:read`, `members:manage`, `sources:read`, `sources:write`,
 `files:read`, `files:write`, `gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`,
-`webhooks:manage`. File endpoints use `files:*` (`GET /files` and `GET /files/{id}` need
+`embeds:create`, `embeds:read`, `webhooks:manage`. File endpoints use `files:*` (`GET /files` and `GET /files/{id}` need
 `files:read`; upload, duplicate and delete need `files:write`).
 A key or token never exceeds the role of the member it acts as, whatever scopes it has.
 

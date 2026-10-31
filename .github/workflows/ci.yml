@@ -66,6 +66,32 @@ jobs:
       - name: Build
         run: npm run build
 
+  embed:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/embed
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
+
   slack-bot:
     runs-on: ubuntu-latest
     steps:
@@ -81,6 +107,37 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/venv/bin/python" -r examples/slack-bot/requirements.txt
       - name: Lint and test
         working-directory: examples/slack-bot
+        run: |
+          ruff check .
+          pytest -q
+
+  embed-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      # The Node example imports the SDK and the element from this checkout, so build both first.
+      - name: Build the TypeScript SDK and the element
+        run: |
+          (cd sdks/typescript && (if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi) && npm run generate && npm run build)
+          (cd sdks/embed && (if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi) && npm run build)
+      - name: Node example
+        working-directory: examples/embed/node
+        run: |
+          npm install --no-audit --no-fund
+          npm test
+      - name: Install the Python SDK
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" -e "sdks/python[dev]"
+      - name: Python example
+        working-directory: examples/embed/python
         run: |
           ruff check .
           pytest -q
