@@ -26,7 +26,7 @@ Four decisions, all covered below:
 
 ## Ask, and keep the conversation
 
-`POST /ask` takes `question`, and optionally `conversation_id`, `source_id` and `language`. Send an `Idempotency-Key`; a retry with the same key is not charged twice.
+`POST /ask` takes `question`, and optionally `conversation_id`, `source_id` and `language`. Send an `Idempotency-Key`; a retry with the same key answers once and is charged once.
 
 The reply is an Answer. `status` is one of `answered`, `clarification`, `empty` or `error`. HTTP `200` with `status: "error"` is not an HTTP error.
 
@@ -72,7 +72,7 @@ The reply is an Answer. `status` is one of `answered`, `clarification`, `empty` 
     console.log(second.answer);
     ```
 
-Only one request can run in a conversation at a time. If the same user sends two messages quickly, serialise them per user (a lock or a queue); a `409` `busy` means wait a few seconds and retry the same request with the same `Idempotency-Key`.
+Keep one question at a time running per conversation. If the same user sends two messages quickly, serialise them per user (a lock or a queue), because the second is a follow-up to the first answer. A `409` `busy` (the previous question in a conversation is still being worked on) is documented for predictive questions; if you meet it, wait a few seconds and retry the same request with the same `Idempotency-Key`.
 
 ## Answers that take a while: respond-async
 
@@ -85,7 +85,7 @@ curl -si -H "Authorization: Bearer $MATIH_API_KEY" -H 'Content-Type: application
   $BASE/ask
 # HTTP/2 202
 # Preference-Applied: respond-async
-# {"id": "job_8f2c", "kind": "ask", "state": "queued", ...}
+# {"id": "9b1e4c7a02d84f3b8a5e6d7c0f1a2b3c", "kind": "ask", "state": "queued", ...}
 ```
 
 Register one webhook for the integration once, at deploy time:
@@ -96,7 +96,7 @@ curl -s -H "Authorization: Bearer $MATIH_API_KEY" -H 'Content-Type: application/
 # the response carries "secret": "whsec_..." exactly once; store it as MATIH_WEBHOOK_SECRET
 ```
 
-A webhook made with an API key receives only the events of that key's own jobs. When it fires, `data` holds `job_id`, `kind` and `state`; fetch the Answer with `GET /jobs/{id}`. Always verify `Matih-Signature` against the raw body first. Full details in [Webhooks](webhooks.md), job states in [Jobs](../concepts/jobs.md) and the modes in [Sync and async](../concepts/sync-async.md).
+A webhook made with an API key receives only the events of that key's own jobs. When it fires, `data` is the summarised Job (`job_id`, `kind`, `state`, `result`, `error`, `links`) with long strings cut to 500 characters, so fetch the full Answer with `GET /jobs/{id}`. Always verify `Matih-Signature` against the raw body first. Full details in [Webhooks](webhooks.md), job states in [Jobs](../concepts/jobs.md) and the modes in [Sync and async](../concepts/sync-async.md).
 
 !!! note "Do you need async at all?"
     A bot that sends a "thinking..." message first and then replies from a background task is enough for most questions. Add `respond-async` when your platform kills long-lived work (serverless functions with short limits) or when you want the bot process to be stateless across restarts.
@@ -367,7 +367,7 @@ Answers can carry an `image_url`: a signed link that expires in 15 minutes and n
 | `402` `not_ready` | The workspace pool is empty | Tell the user once; do not retry. An admin adds credits |
 | `402` `member_cap` | The member's monthly cap is reached | Tell the user a cap was reached |
 | `403` `scope` | **Ask** is off for the key | A deploy problem; alert yourself, tell the user it is unavailable |
-| `409` `busy` | A request is already running in this conversation | Wait 3 to 5 s, retry with the same `Idempotency-Key` |
+| `409` `busy` | The previous question in this conversation is still being worked on (documented for predictive questions) | Wait 3 to 5 s, retry with the same `Idempotency-Key` |
 | `429` | Rate limited; `Retry-After` gives seconds | Wait at least that long; the SDKs already retry twice |
 | `5xx` | Server error | Retry up to 3 times with backoff, then log the `request_id` |
 

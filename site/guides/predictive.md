@@ -1,6 +1,6 @@
 # Predictive questions
 
-Forecasts, anomaly checks, segmentation and what-ifs go through `POST /predictions`. They are heavier than a normal question, so they run as background **Jobs** that can take anywhere from a minute to 30 minutes. You start one, then either poll the job or take a webhook.
+Forecasts, anomaly checks, segmentation and what-ifs go through `POST /predictions`. They are heavier than a normal question, so they run as background **Jobs** that can take anywhere from a minute to 30 minutes. You start one, then either poll the job or take a webhook. The request is async by default (`202` and a Job); add `Prefer: wait=N` (or `?wait=N`, N up to 60) to have it hold until the job finishes when that is quick, and carry on polling if it is not.
 
 !!! info "You need"
     - Product: **Predictive analytics** (scope `predict`).
@@ -14,12 +14,12 @@ export BASE=https://workspace.matih.ai/api/v1
 
 ## Start a prediction
 
-Body fields: `question` (required), `source_id` (optional when only one source is active) and `conversation_id` (optional). Send an `Idempotency-Key`: a retry with the same key is not charged twice. The SDKs add one for you.
+Body fields: `question` (required), `source_id` (optional: the active source is used), `conversation_id` (optional, to continue a conversation) and `language` (optional, for the answer text). Send an `Idempotency-Key`: a retry with the same key returns the same Job and is charged once. The SDKs add one for you.
 
 The response is `202` with a Job:
 
 ```json
-{"id": "job_8f2c", "kind": "prediction", "state": "queued", "result": null, "error": null,
+{"id": "5d0c9e1a7b3f4a2c8e6d1f0b9a8c7e65", "kind": "prediction", "state": "queued", "result": null, "error": null,
  "created_at": "2026-10-31T10:00:00Z", "updated_at": "2026-10-31T10:00:00Z"}
 ```
 
@@ -39,7 +39,8 @@ The response is `202` with a Job:
 
     client = Mitra()  # reads MATIH_API_KEY
     job = client.predictions.create(
-        "Forecast monthly revenue for the next 6 months", source_id="SOURCE_ID"
+        "Forecast monthly revenue for the next 6 months", source_id="SOURCE_ID",
+        background=True,   # return the queued Job at once; without it the call waits for the result
     )
     print(job.id, job.state)
     ```
@@ -53,7 +54,8 @@ The response is `202` with a Job:
     async def main():
         async with AsyncMitra() as client:
             job = await client.predictions.create(
-                "Forecast monthly revenue for the next 6 months", source_id="SOURCE_ID"
+                "Forecast monthly revenue for the next 6 months", source_id="SOURCE_ID",
+                background=True,
             )
             print(job.id, job.state)
 
@@ -66,10 +68,10 @@ The response is `202` with a Job:
     import { Mitra } from "@matihlabs/mitra";
 
     const mitra = new Mitra({ apiKey: process.env.MATIH_API_KEY });
-    const job = await mitra.predictions.create({
-      question: "Forecast monthly revenue for the next 6 months",
-      source_id: "SOURCE_ID",
-    });
+    const job = await mitra.predictions.create(
+      { question: "Forecast monthly revenue for the next 6 months", source_id: "SOURCE_ID" },
+      { background: true }, // return the queued Job at once; without it the call waits for the result
+    );
     console.log(job.id, job.state);
     ```
 
@@ -218,7 +220,7 @@ A polite cadence for a long job: every 5 seconds for the first minute, every 15 
 === "curl"
 
     ```bash
-    JOB_ID=job_...
+    JOB_ID=...   # the "id" of the Job
     START=$(date +%s); DELAY=5
     while :; do
       JOB=$(curl -s -H "Authorization: Bearer $MATIH_API_KEY" $BASE/jobs/$JOB_ID)
@@ -243,7 +245,7 @@ A polite cadence for a long job: every 5 seconds for the first minute, every 15 
 
     client = Mitra()
     try:
-        job = client.predictions.create("Forecast monthly revenue for the next 6 months")
+        job = client.predictions.create("Forecast monthly revenue for the next 6 months", background=True)
         done = client.jobs.wait(job, timeout=1860, on_update=lambda j: print(j.state))
     except JobTimeoutError as e:
         print("still running, job id:", e.job.id)   # the job keeps running
@@ -254,7 +256,7 @@ A polite cadence for a long job: every 5 seconds for the first minute, every 15 
     print(done.result["answer"])
     ```
 
-    `client.predictions.run(question)` is the one-call version: it creates the job and waits.
+    `client.predictions.run(question)` is the one-call version: it creates the job and waits (without `background=True`, `create` waits too).
 
 === "Python async"
 
@@ -279,7 +281,10 @@ A polite cadence for a long job: every 5 seconds for the first minute, every 15 
 
     const mitra = new Mitra({ apiKey: process.env.MATIH_API_KEY });
     try {
-      const job = await mitra.predictions.create({ question: "Forecast monthly revenue for the next 6 months" });
+      const job = await mitra.predictions.create(
+        { question: "Forecast monthly revenue for the next 6 months" },
+        { background: true },
+      );
       const done = await mitra.jobs.wait(job, {
         timeoutMs: 31 * 60_000,
         onProgress: (j) => console.log(j.state),
@@ -322,23 +327,23 @@ For Java, Go, C#, PHP and Ruby the loop is the same: `GET /jobs/{id}`, branch on
 
 ## Read the result
 
+When the job has `succeeded`, `result` is:
+
 ```json
 {
-  "answer": "Revenue is forecast to grow 6% per month...",
-  "attachments": [{"type": "forecast"}, {"type": "table"}],
-  "image_url": "https://workspace.matih.ai/api/v1/media/<token>.png"
+  "conversation_id": "5c1d0a4e8b7f4e3a9d2c6b1a0f9e8d7c",
+  "answer": "Revenue is forecast to grow 6% per month..."
 }
 ```
 
-- `answer`: show this first.
-- `attachments`: each has a `type` of `forecast`, `table`, `model` or `what_if`, plus type-specific fields. Show what you recognise and ignore the rest.
-- `image_url`: an optional chart, signed and valid for 15 minutes ([Images](../concepts/images.md)).
+- `answer`: show this first. It is the finished written answer, including the assumptions.
+- `conversation_id`: the conversation the prediction ran in. Pass it as `conversation_id` on the next `POST /predictions` (or `POST /ask`) to follow up.
 
 State the assumptions and the uncertainty. A forecast is an estimate, not a promise.
 
 ## Take a webhook instead of polling
 
-Register `prediction.completed` (or `job.completed`) and Matih posts to your server when the job finishes. The `data` has `job_id`, `conversation_id` and `state`; fetch the details from `GET /jobs/{id}`. Verify the signature first. See [Webhooks](webhooks.md).
+Register `prediction.completed` (or `job.completed`) and Matih posts to your server when the job finishes. The `data` is the summarised Job (`job_id`, `kind`, `state`, `result`, `error`, `links`) with long strings cut to 500 characters; fetch the full answer from `GET /jobs/{id}`. Verify the signature first. See [Webhooks](webhooks.md).
 
 ```bash
 curl -s -H "Authorization: Bearer $MATIH_API_KEY" -H 'Content-Type: application/json' \
@@ -352,7 +357,7 @@ curl -s -H "Authorization: Bearer $MATIH_API_KEY" -H 'Content-Type: application/
 curl -s -X POST -H "Authorization: Bearer $MATIH_API_KEY" $BASE/jobs/$JOB_ID/cancel
 ```
 
-Python `client.jobs.cancel(job_id)`; TypeScript `mitra.jobs.cancel(id)`. A job already in a final state cannot be cancelled, and cancelling does not necessarily refund credits.
+Python `client.jobs.cancel(job_id)`; TypeScript `mitra.jobs.cancel(id)`. A queued job stops at once, a running one at its next checkpoint, and a job already in a final state is left as it is.
 
 ## When it fails
 
