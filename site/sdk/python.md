@@ -102,9 +102,9 @@ The client closes the httpx client it created when you leave a `with` block (`as
 
 ## Ask
 
-### `ask(question, *, conversation_id=None, source_id=None, language=None, **opts) -> Answer`
+### `ask(question, *, conversation_id=None, source_id=None, language=None, background=False, **opts) -> Answer | Job`
 
-Sends `POST /ask`. Scope `ask`. Costs credits, so an `Idempotency-Key` is generated for you and reused across retries.
+Sends `POST /ask`. Scope `ask`. Costs credits, so an `Idempotency-Key` is generated for you and reused across retries. With `background=True` it sends `Prefer: respond-async` and returns a `Job` of kind `ask` at once; finish it with `client.jobs.wait(job).as_answer()`.
 
 === "Sync"
 
@@ -144,7 +144,7 @@ Sends `POST /ask`. Scope `ask`. Costs credits, so an `Idempotency-Key` is genera
         )
     ```
 
-`answer.status` is `answered`, `clarification`, `empty` or `error`. These are normal HTTP 200 responses, not exceptions. Reuse `answer.conversation_id` to keep a conversation going. Force the reply language with `language="hi-IN"`; data values, SQL and column names are never translated.
+`answer.status` is `answered`, `empty`, `clarification`, `error` or `cancelled`. These are normal HTTP 200 responses, not exceptions. Reuse `answer.conversation_id` to keep a conversation going. Force the reply language with `language="hi-IN"`; data values, SQL and column names are never translated.
 
 ### `ask_stream(question, *, conversation_id=None, source_id=None, language=None, **opts)`
 
@@ -207,8 +207,8 @@ Each resource hangs off the client: `client.workspaces`, `client.sources`, `clie
 
 | Method | Endpoint | Returns |
 |---|---|---|
-| `workspaces.list()` | `GET /workspaces` | `WorkspaceList` (`.current`, `.workspaces`) |
-| `workspaces.use(workspace_id)` | `PUT /me/workspace` | the response body. OAuth tokens only |
+| `workspaces.list()` | `GET /workspaces` | `WorkspaceList` (`.current`, `.workspaces`, `.invitations`) |
+| `workspaces.use(workspace_id)` | `PUT /me/workspace` | `WorkspaceChosen`. OAuth tokens only; an API key is pinned to one workspace |
 
 ```python
 ws = client.workspaces.list()
@@ -216,64 +216,62 @@ print(ws.current, [(w.id, w.name, w.role) for w in ws.workspaces])
 client.workspaces.use(ws.workspaces[0].id)
 ```
 
-`use` changes the person's current workspace. A client with `workspace_id=` set does not follow it automatically; pass `workspace_id=` per call or build a new client. See [Switch workspaces](../guides/switch-workspaces.md).
+`use` changes the person's current workspace. A client with `workspace_id=` set does not follow it automatically; pass `workspace_id=` per call (sent as `X-Matih-Workspace`) or build a new client. See [Switch workspaces](../guides/switch-workspaces.md).
 
 ### Sources
 
 | Method | Endpoint | Notes |
 |---|---|---|
 | `sources.list()` | `GET /sources` | `SourceList` |
-| `sources.get(source_id)` | `GET /sources/{id}` | includes readiness |
-| `sources.connectors()` | `GET /connectors` | connector types and the fields each needs |
-| `sources.test(config)` | `POST /sources/test` | `sources:write` |
-| `sources.create(config, *, activate=True)` | `POST /sources` | admin and `sources:write`. Raises `SourceTestFailedError` on 422 |
+| `sources.get(source_id)` | `GET /sources/{id}` | `Source`, with `readiness` (`can_ask`) |
+| `sources.connectors()` | `GET /connectors` | `ConnectorList`: connector types and the fields each needs (also `client.connectors.list()`) |
+| `sources.test(config)` | `POST /sources/test` | `SourceTest`; saves nothing |
+| `sources.create(config, *, activate=True, wait=None, background=False)` | `POST /sources` | Admin and `sources:write`. Returns `SourceCreated`. Raises `SourceTestFailedError` on 422 |
 | `sources.activate(source_id)` | `POST /sources/{id}/activate` | `sources:write` |
-| `sources.delete(source_id)` | `DELETE /sources/{id}` | destructive |
+| `sources.delete(source_id)` | `DELETE /sources/{id}` | `SourceDeleted`. Destructive |
 
 ```python
 from mitra import SourceTestFailedError
 
-config = {"type": "postgres", "host": "db.example.com", "port": 5432,
-          "database": "sales", "user": "reader", "password": "..."}
+config = {"connector_type": "postgres", "display_name": "Orders DB", "host": "db.example.com",
+          "port": 5432, "database": "sales", "user": "reader", "password": "..."}
 try:
-    source = client.sources.create(config, activate=True)
+    created = client.sources.create(config, activate=True)
 except SourceTestFailedError as e:
-    print(e.test_result)       # nothing was created
+    print(e.test_result)       # nothing was saved
+else:
+    print(created.source.readiness.can_ask)
 ```
 
-Take the exact `type` and field names from `sources.connectors()`. See [Connect a data source](../guides/connect-source.md).
+`config` is the source's settings: `connector_type` plus the fields that type takes, as listed by `sources.connectors()`. `create` waits by default until `source.readiness.can_ask` is true (up to `wait` seconds, default 300), because Matih reads the tables in the background after saving. If it is not ready by then you get the source as it stands (`readiness.phase == "building"`) and nothing is raised, so check `can_ask`. Pass `background=True` to return right after the save. See [Connect a data source](../guides/connect-source.md).
 
 ### Files
 
 | Method | Endpoint | Notes |
 |---|---|---|
-| `files.upload(file, *, filename=None, content_type=None, on_duplicate=None)` | `POST /files` | CSV or Excel, `sources:write`. Returns `File` |
-| `files.get(file_id)` | `GET /files/{id}` | status, analysis state, `decision_required` |
-| `files.list()` | `GET /files` | |
-| `files.duplicate(file_id, decision)` | `POST /files/{id}/duplicate` | answer a duplicate prompt |
-| `files.delete(file_id)` | `DELETE /files/{id}` | destructive |
+| `files.upload(file, *, filename=None, content_type=None, on_duplicate=None, wait=None, background=False)` | `POST /files` | CSV, Parquet, JSON or Excel; `files:write`. Returns `File` |
+| `files.get(file_id)` | `GET /files/{id}` | `status`, `ready`, `analysis_state`, `decision_required` |
+| `files.list()` | `GET /files` | `FileList` |
+| `files.duplicate(file_id, decision)` | `POST /files/{id}/duplicate` | `decision` is `use_existing`, `keep_both` or `cancel` |
+| `files.delete(file_id)` | `DELETE /files/{id}` | Destructive |
 
 ```python
-import time
-
-f = client.files.upload("sales.csv", on_duplicate="replace")
-while client.files.get(f.id).status == "processing":
-    time.sleep(3)
-status = client.files.get(f.id)
-if getattr(status, "decision_required", False):
-    client.files.duplicate(f.id, "replace")
+f = client.files.upload("sales.csv")           # waits until the file is settled
+if f.decision_required == "duplicate":         # an identical file is already there
+    f = client.files.duplicate(f.id, "use_existing")
+print(f.status, f.ready, [t.model_name for t in f.tables])
 ```
 
-Extra response fields such as `decision_required` and `analysis_state` are available as attributes because models accept unknown fields. See [Upload a file](../guides/upload-file.md).
+`on_duplicate` is `ask` (the default: an identical file waits for your decision) or `keep_both`. By default `upload` waits, up to `wait` seconds (default 300), until the file is `ready`, `failed`, `needs_attention` or waiting for a decision; on timeout it returns the file as it stands. Pass `background=True` to return right after the upload and poll `files.get` yourself. See [Upload a file](../guides/upload-file.md).
 
 ### Gems
 
 | Method | Endpoint | Notes |
 |---|---|---|
 | `gems.list(source_id=None)` | `GET /gems` | `GemList` |
-| `gems.get(gem_id)` | `GET /gems/{id}` | `Gem` |
-| `gems.image(gem_id)` | `GET /gems/{id}/image.png` | PNG `bytes` |
-| `gems.generate(source_id)` | `POST /gems/generate` | `gems:generate`. Returns a `Job` (202) |
+| `gems.get(gem_id, source_id=None)` | `GET /gems/{id}` | `Gem` |
+| `gems.image(gem_id, source_id=None)` | `GET /gems/{id}/image.png` | PNG `bytes` |
+| `gems.generate(source_id=None, *, wait=None, background=False)` | `POST /gems/generate` | `gems:generate`. Returns the finished `Job` |
 
 === "Sync"
 
@@ -281,8 +279,7 @@ Extra response fields such as `decision_required` and `analysis_state` are avail
     gems = client.gems.list(source_id="src_1")
     png = client.gems.image(gems.gems[0].id)
 
-    job = client.gems.generate("src_1")
-    job = client.jobs.wait(job)
+    job = client.gems.generate("src_1")          # waits, result: {source_id, state, gem_count}
     ```
 
 === "Async"
@@ -292,25 +289,25 @@ Extra response fields such as `decision_required` and `analysis_state` are avail
     png = await client.gems.image(gems.gems[0].id)
 
     job = await client.gems.generate("src_1")
-    job = await client.jobs.wait(job)
     ```
 
-See [Gems feed](../guides/gems-feed.md).
+`generate` waits for the job (up to `wait` seconds, default 600) and raises `JobTimeoutError` if it is still running then; the job keeps going. With `background=True` it returns the queued `Job` at once, and you finish with `jobs.wait` or the `gems.ready` webhook. See [Gems feed](../guides/gems-feed.md).
 
 ### Dashboards
 
 | Method | Endpoint | Notes |
 |---|---|---|
 | `dashboards.list()` | `GET /dashboards` | `DashboardList` |
-| `dashboards.get(dashboard_id)` | `GET /dashboards/{id}` | `Dashboard` |
-| `dashboards.image(dashboard_id)` | `POST /dashboards/{id}/image` | Returns a `Job` whose result is `{image_url, width, height}` |
-| `dashboards.render(dashboard_id, *, timeout=300.0)` | | Starts the job, waits, downloads the PNG, returns `bytes` |
+| `dashboards.get(dashboard_id)` | `GET /dashboards/{id}` | `Dashboard`, with `widgets` |
+| `dashboards.image(dashboard_id, *, width=None, wait=None, background=False)` | `POST /dashboards/{id}/image` | Returns the finished `Job`; result `{image_url, width, height}`. `width` is 400 to 3200 (default 1600) |
+| `dashboards.image_bytes(dashboard_id, *, width=None, timeout=300.0)` | `GET /dashboards/{id}/image.png` | Follows the redirect or the Job, returns PNG `bytes` |
+| `dashboards.render(dashboard_id, *, width=None, timeout=300.0)` | `POST /dashboards/{id}/image` | Draws, waits, downloads, returns PNG `bytes` |
 
 === "Sync"
 
     ```python
     dash = client.dashboards.list().dashboards[0]
-    png = client.dashboards.render(dash.id)
+    png = client.dashboards.render(dash.id, width=1200)
     open("dashboard.png", "wb").write(png)
     ```
 
@@ -318,34 +315,34 @@ See [Gems feed](../guides/gems-feed.md).
 
     ```python
     dash = (await client.dashboards.list()).dashboards[0]
-    png = await client.dashboards.render(dash.id)
+    png = await client.dashboards.render(dash.id, width=1200)
     open("dashboard.png", "wb").write(png)
     ```
 
-See [Dashboard image previews](../guides/dashboard-previews.md).
+A dashboard drawn in the last ten minutes at the same width is reused. See [Dashboard image previews](../guides/dashboard-previews.md).
 
 ### Predictions
 
 | Method | Notes |
 |---|---|
-| `predictions.create(question, *, source_id=None, conversation_id=None)` | `POST /predictions`, scope `predict`. Returns a `Job`; can take up to 30 minutes |
-| `predictions.run(question, *, timeout=1860.0, poll_interval=, max_poll_interval=, on_update=, source_id=, conversation_id=, ...)` | Creates the job and waits. Returns the finished `Job` |
+| `predictions.create(question, *, source_id=None, conversation_id=None, language=None, wait=None, background=False)` | `POST /predictions`, scope `predict`. Returns the finished `Job` (waits up to `wait` seconds, default 1860); predictions can take up to 30 minutes |
+| `predictions.run(question, *, timeout=1860.0, **kwargs)` | Same as `create(question, wait=timeout, ...)` |
 
 === "Sync"
 
     ```python
     job = client.predictions.run("Forecast monthly revenue for the next 6 months", source_id="src_1")
-    print(job.result["answer"], job.result.get("attachments"))
+    print(job.result["answer"])
     ```
 
 === "Async"
 
     ```python
     job = await client.predictions.run("Forecast monthly revenue for the next 6 months", source_id="src_1")
-    print(job.result["answer"], job.result.get("attachments"))
+    print(job.result["answer"])
     ```
 
-The result is `{answer, attachments: [...], image_url?}`. See [Predictive questions](../guides/predictive.md).
+The result is `{conversation_id, answer}`; keep the `conversation_id` to ask a follow-up in the same conversation. With `background=True` you get the queued `Job` at once. See [Predictive questions](../guides/predictive.md).
 
 ### Jobs
 
@@ -353,7 +350,7 @@ The result is `{answer, attachments: [...], image_url?}`. See [Predictive questi
 |---|---|
 | `jobs.get(job_id)` | `GET /jobs/{id}` |
 | `jobs.cancel(job_id)` | `POST /jobs/{id}/cancel` |
-| `jobs.wait(job, *, timeout=1860.0, poll_interval=1.0, max_poll_interval=15.0, on_update=None, raise_on_failure=True)` | polls until terminal |
+| `jobs.wait(job, timeout=1860.0, *, poll_interval=1.0, max_poll_interval=15.0, on_update=None, raise_on_failure=True)` | polls until terminal |
 
 `wait` takes a `Job` or a job id. It polls with growing delays (1 s growing to 15 s by default) until the job is `succeeded`, `failed` or `cancelled`.
 
@@ -365,8 +362,11 @@ The result is `{answer, attachments: [...], image_url?}`. See [Predictive questi
 | `raise_on_failure` | `True` raises `JobFailedError` for `failed` or `cancelled`; `False` returns the job so you can inspect `job.error` |
 
 ```python
-job = client.predictions.create("Forecast Q4 revenue")
+job = client.predictions.create("Forecast Q4 revenue", background=True)
 job = client.jobs.wait(job, timeout=2100, on_update=lambda j: print(j.state))
+
+queued = client.ask("Revenue by region, last 4 quarters", background=True)   # a Job of kind "ask"
+answer = client.jobs.wait(queued).as_answer()
 ```
 
 See [Jobs](../concepts/jobs.md) and [Sync vs async](../concepts/sync-async.md).
@@ -398,20 +398,22 @@ Needs `webhooks:manage` and an admin member. See the [webhooks guide](../guides/
 | `members.list()` | `GET /members` | `members:read` |
 | `members.update(member_id, role)` | `PATCH /members/{id}` | `members:manage` |
 | `members.remove(member_id)` | `DELETE /members/{id}` | `members:manage` |
-| `invitations.create(role, *, email=None, phone=None)` | `POST /invitations` | `members:manage` |
+| `invitations.create(role="user", *, email=None, phone=None, whatsapp_only=False)` | `POST /invitations` | `members:manage` |
 | `invitations.list()` | `GET /invitations` | `members:read` |
 | `invitations.revoke(invitation_id)` | `DELETE /invitations/{id}` | `members:manage` |
 
 ```python
-client.invitations.create("member", email="new@example.com")
-client.invitations.create("member", phone="+910000000000")
+client.invitations.create("user", email="new@example.com")
+inv = client.invitations.create("viewer", phone="+910000000000")
+if inv.join_code:                    # WhatsApp delivery failed: share this yourself, shown once
+    print(inv.join_message)
 ```
 
-`invitations.create` needs exactly one of `email` or `phone`, otherwise it raises `ValueError`. Take valid roles from `members.list()`. See [Invite members](../guides/invite-members.md).
+Roles you can give are `admin`, `user` and `viewer`; `owner` is never givable. `invitations.create` needs exactly one of `email` or `phone`, otherwise it raises `ValueError`. See [Invite members](../guides/invite-members.md).
 
 ### Conversations
 
-`conversations.list()` and `conversations.get(conversation_id)` return the decoded JSON.
+`conversations.list()` returns a `ConversationList` and `conversations.get(conversation_id)` a `Conversation` with its `messages`.
 
 ## Retries and idempotency
 
@@ -424,13 +426,13 @@ The client retries for you, up to `max_retries` times (default 2), with the dela
 | Network errors | Same rule as above |
 | Other statuses, including `500` | Never |
 
-`ask`, `ask_stream`, `ask_audio`, `gems.generate`, `dashboards.image` and `predictions.create` send an `Idempotency-Key` automatically (a fresh UUID per call, reused across that call's retries), so a retry is never charged twice. Pass `idempotency_key=` to set your own, for example to survive a process restart:
+`ask`, `ask_stream`, `ask_audio` and `predictions.create` send an `Idempotency-Key` automatically (a fresh UUID per call, reused across that call's retries). The server honours the key on `POST /ask` and `POST /predictions` only, so on those two a retry answers once and is charged once (`ask_audio` sends one too, which is harmless). Pass `idempotency_key=` to set your own, for example to survive a process restart:
 
 ```python
 client.predictions.create("Forecast Q4 revenue", idempotency_key="report-2026-q4")
 ```
 
-Use a new key for a new logical request. Other `POST` calls without a key (such as `sources.create`) are not retried on `5xx`.
+Use a new key for a new logical request. Other `POST` calls (such as `sources.create` or `gems.generate`) are not retried on `5xx`, because repeating them could do the work twice.
 
 ## Errors
 
@@ -442,8 +444,8 @@ Every API error derives from `MitraError`. The class is chosen from the HTTP sta
 | `CreditsError` | 402 | `not_ready`, `member_cap` | |
 | `PermissionDeniedError` | 403 | `scope`, `workspace_role`, `source_access` | |
 | `BusyError` | 409 | `busy` | |
-| `SourceTestFailedError` | 422 from `sources.create` | | `test_result` |
-| `RateLimitError` | 429 | | `retry_after` (seconds, or `None`) |
+| `SourceTestFailedError` | 422 from `sources.create` | `connection` | `test_result` |
+| `RateLimitError` | 429 | `rate_limit` | `retry_after` (seconds, or `None`) |
 | `JobFailedError` | job `failed` or `cancelled` | | `job` |
 | `JobTimeoutError` | `jobs.wait` timed out | | `job` |
 | `MitraError` | anything else, and network failures | | |
@@ -469,7 +471,7 @@ except MitraError as e:
 
 ## Models
 
-`mitra.models` holds pydantic models for the main shapes. They accept unknown fields (`extra="allow"`), so a field the server adds later never breaks an older client, and the extra values are still readable as attributes.
+`mitra.models` holds pydantic models for every response. They accept unknown fields (`extra="allow"`), so a field the server adds later never breaks an older client, and the extra values are still readable as attributes.
 
 | Model | Fields |
 |---|---|
@@ -477,16 +479,21 @@ except MitraError as e:
 | `ResultTable` | `columns` (`name`, `type`), `rows`, `row_count`, `truncated` |
 | `Clarification` | `question`, `options` |
 | `Heard` | `transcript`, `language` |
-| `Job` | `id`, `kind`, `state`, `result`, `error` (`category`, `message`), `created_at`, `updated_at`, `is_terminal` |
-| `Gem`, `GemList` | `id`, `kind`, `headline`, `explanation`, `figures`, `question`, `image_url`, `created_at`; list has `state`, `gems`, `generated_at` |
-| `Workspace`, `WorkspaceList` | `id`, `name`, `role`, `kind`; list has `current`, `workspaces` |
-| `Source`, `SourceList` | `id`, `name`, `type`, `status`, `active` |
-| `Dashboard`, `DashboardList` | `id`, `title`, `updated_at` |
-| `File` | `id`, `status` |
-| `Webhook` | `id`, `url`, `events`, `secret` (create response only) |
+| `Job` | `id`, `kind`, `state`, `result`, `error` (`category`, `message`), `created_at`, `updated_at`, `is_terminal`, `as_answer()` |
+| `Gem`, `GemList` | `id`, `kind`, `headline`, `explanation`, `figures` (`label`, `value`), `question`, `source_id`, `image_url`, `created_at`; list has `state`, `gems`, `generated_at` |
+| `Workspace`, `WorkspaceList` | `id`, `name`, `role`, `kind`, `own`; list has `current`, `workspaces`, `invitations` |
+| `Source`, `SourceList` | `id`, `name`, `connector_type`, `settings`, `secret_fields_set`, `state`, `is_active`, `is_sample`, `last_test_ok`, `readiness`; list has `sources`, `active_source_id` |
+| `SourceCreated` | `source`, `test`, `applied`, `catalog_job_id` |
+| `SourceReadiness` | `source_id`, `phase` (`ready`, `building`, `not_connected`), `can_ask`, `message`, `catalog` |
+| `Dashboard`, `DashboardList` | `id`, `title`, `description`, `source_id`, `status`, `revision`, `widget_count`, `widgets` (`id`, `title`, `visual`, `question`), `created_at`, `updated_at` |
+| `File`, `FileList` | `id`, `name`, `format`, `size_bytes`, `status`, `stage`, `ready`, `analysis_state`, `warnings`, `error_category`, `error_message`, `retryable`, `duplicate_of`, `decision_required`, `decision_options`, `tables`, `is_settled` |
+| `Member`, `MemberList` | `id`, `name`, `email`, `phone`, `role`, `whatsapp_only`, `joined_at`, `last_seen_at`, `monthly_cap_credits`, `you`, `can_change_role`, `can_remove` |
+| `Invitation`, `InvitationList` | `id`, `channel`, `target`, `role`, `whatsapp_only`, `expires_at`, `expired`, `delivered`, `join_code`, `join_message`, `join_url` (the last three only when delivery failed, shown once) |
+| `Webhook` | `id`, `url`, `events`, `failure_count`, `disabled_at`, `secret` (create response only) |
+| `Conversation`, `ConversationList` | `Conversation` has its `messages` |
 | `StreamEvent` | `event`, `data`, `as_answer()` |
 
-Job states are `queued`, `running`, `succeeded`, `failed` and `cancelled`. Methods that return plain data (`sources.get`, `files.list`, `members.list`, `conversations.*`, `webhooks.list`, `invitations.*`) give you the decoded JSON as dicts.
+Job states are `queued`, `running`, `succeeded`, `failed` and `cancelled`. Roles are `owner`, `admin`, `user` and `viewer`.
 
 ## Verify webhooks
 

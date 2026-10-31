@@ -1,6 +1,6 @@
 # TypeScript SDK
 
-`@matihlabs/mitra` is the TypeScript client for the Matih public API. It is typed end to end, has one runtime dependency (`openapi-fetch`), retries for you, sends idempotency keys on every call that spends credits, streams answers as server-sent events, polls background jobs and verifies webhook signatures in constant time.
+`@matihlabs/mitra` is the TypeScript client for the Matih public API. It is typed end to end, has one runtime dependency (`openapi-fetch`), retries for you, sends idempotency keys on the calls that honour them (`ask` and `predictions.create`), streams answers as server-sent events, polls background jobs and verifies webhook signatures in constant time.
 
 ```bash
 npm install @matihlabs/mitra
@@ -65,7 +65,7 @@ Every method takes a final `RequestOptions` object:
 |---|---|
 | `workspaceId` | `X-Matih-Workspace` for this call |
 | `language` | `Accept-Language` for this call |
-| `idempotencyKey` | Your own `Idempotency-Key` for a credit-spending call |
+| `idempotencyKey` | Your own `Idempotency-Key`. The server honours it on `ask` and `predictions.create` |
 | `signal` | An `AbortSignal`. Aborting cancels the request and any retries |
 | `timeoutMs` | Per-attempt timeout for this call |
 | `maxRetries` | Retries for this call |
@@ -81,7 +81,7 @@ Calls that return image bytes take `ImageBytesOptions` (`RequestOptions` plus `w
 
 ### `ask(question: string | AskParams, opts?): Promise<Answer>`
 
-`POST /ask`, scope `ask`. Costs credits, so an idempotency key is generated and reused across retries. `AskParams` is `{ question, conversation_id?, source_id?, language? }`.
+`POST /ask`, scope `ask`. Costs credits, so an idempotency key is generated and reused across retries. `AskParams` is `{ question, conversation_id?, source_id?, language? }`. With `{ background: true }` it sends `Prefer: respond-async` and returns a `Job` of kind `ask` at once; its `result` is the `Answer` (`const job = await mitra.ask(q, { background: true }); const done = await mitra.jobs.wait(job);`).
 
 ```ts
 const answer = await mitra.ask({ question: "What were last month's sales by region?", source_id: "src_1" });
@@ -104,7 +104,7 @@ if (answer.status === "answered") {
 
 (`import { writeFile } from "node:fs/promises";` for the example above.)
 
-`answer.status` is `answered`, `clarification`, `empty` or `error`; these are normal HTTP 200 responses, not exceptions. `image_url` is a short-lived signed URL, see [Images](../concepts/images.md). Reuse `answer.conversation_id` for follow-ups. Text fields come back translated when you ask for a language; `sql`, rows and column names never are.
+`answer.status` is `answered`, `empty`, `clarification`, `error` or `cancelled`; these are normal HTTP 200 responses, not exceptions. `image_url` is a short-lived signed URL, see [Images](../concepts/images.md). Reuse `answer.conversation_id` for follow-ups. Text fields come back translated when you ask for a language; `sql`, rows and column names never are.
 
 The `Answer` type: `status`, `answer`, `clarification`, `result` (`columns`, `rows`, `row_count`, `truncated`), `sql`, `image_url`, `follow_ups`, `conversation_id`, `request_id`, `language`, and `heard` for voice questions.
 
@@ -154,8 +154,8 @@ On the client: `workspaces`, `sources`, `connectors`, `files`, `gems`, `dashboar
 
 | Method | Endpoint |
 |---|---|
-| `workspaces.list()` | `GET /workspaces`, returns `{ current, workspaces }` |
-| `workspaces.use(workspaceId)` | `PUT /me/workspace`; also becomes this client's default `workspaceId` |
+| `workspaces.list()` | `GET /workspaces`, returns `{ current, workspaces, invitations? }` |
+| `workspaces.use(workspaceId)` | `PUT /me/workspace`, returns `{ current, name }`; also becomes this client's default `workspaceId` |
 
 ```ts
 const { current, workspaces } = await mitra.workspaces.list();
@@ -169,9 +169,9 @@ await mitra.workspaces.use(workspaces[0].id);
 | Method | Endpoint | Notes |
 |---|---|---|
 | `sources.list()` | `GET /sources` | |
-| `sources.get(id)` | `GET /sources/{id}` | includes readiness |
+| `sources.get(id)` | `GET /sources/{id}` | includes `readiness` (`can_ask`) |
 | `sources.test(config)` | `POST /sources/test` | `sources:write` |
-| `sources.create({ config, activate? })` | `POST /sources` | admin and `sources:write`. `activate` defaults to `true`. Throws `SourceTestFailedError` on 422 |
+| `sources.create({ config, activate? }, { wait?, background? })` | `POST /sources` | Admin and `sources:write`. Returns `SourceCreated`. `activate` defaults to `true`. Throws `SourceTestFailedError` on 422 |
 | `sources.activate(id)` | `POST /sources/{id}/activate` | |
 | `sources.delete(id)` | `DELETE /sources/{id}` | destructive |
 | `connectors.list()` | `GET /connectors` | connector types and the fields each needs |
@@ -180,73 +180,74 @@ await mitra.workspaces.use(workspaces[0].id);
 import { SourceTestFailedError } from "@matihlabs/mitra";
 
 try {
-  const source = await mitra.sources.create({
-    config: { type: "postgres", host: "db.example.com", port: 5432, database: "sales", user: "reader", password: "..." },
+  const created = await mitra.sources.create({
+    config: {
+      connector_type: "postgres", display_name: "Orders DB", host: "db.example.com",
+      port: 5432, database: "sales", user: "reader", password: "...",
+    },
   });
+  console.log(created.source?.readiness?.can_ask);
 } catch (err) {
   if (err instanceof SourceTestFailedError) console.error(err.testResult); // nothing was saved
   else throw err;
 }
 ```
 
-Take the exact `type` and field names from `connectors.list()`. See [Connect a data source](../guides/connect-source.md).
+`config` is `connector_type` plus the fields that type takes; take the exact names from `connectors.list()`. `create` waits by default until `source.readiness.can_ask` is true (up to `wait` seconds, default 300), because Matih reads the tables in the background after saving. If it is not ready by then you get the source as it stands (`readiness.phase === "building"`) and nothing is thrown, so check `can_ask`. `background: true` returns right after the save. See [Connect a data source](../guides/connect-source.md).
 
 ### Files
 
 | Method | Endpoint |
 |---|---|
-| `files.upload(file, { filename?, contentType?, onDuplicate? })` | `POST /files` (CSV or Excel, `sources:write`) |
-| `files.get(id)` | `GET /files/{id}`: `status`, `analysis_state?`, `decision_required?` |
+| `files.upload(file, { filename?, contentType?, onDuplicate? }, { wait?, background? })` | `POST /files` (CSV, Parquet, JSON or Excel; `files:write`) |
+| `files.get(id)` | `GET /files/{id}`: `status`, `ready`, `analysis_state?`, `decision_required?` |
 | `files.list()` | `GET /files`, returns `{ files }` |
-| `files.duplicate(id, decision)` | `POST /files/{id}/duplicate` |
+| `files.duplicate(id, decision)` | `POST /files/{id}/duplicate`; `decision` is `use_existing`, `keep_both` or `cancel` |
 | `files.delete(id)` | `DELETE /files/{id}` |
 
 ```ts
 import { readFile } from "node:fs/promises";
 
-const file = await mitra.files.upload(await readFile("sales.csv"), {
+let file = await mitra.files.upload(await readFile("sales.csv"), {
   filename: "sales.csv",
   contentType: "text/csv",
-  onDuplicate: "replace",
-});
+});                                            // waits until the file is settled
 
-let status = await mitra.files.get(file.id);
-while (status.status === "processing") {
-  await new Promise((r) => setTimeout(r, 3000));
-  status = await mitra.files.get(file.id);
+if (file.decision_required === "duplicate") {  // an identical file is already there
+  file = await mitra.files.duplicate(file.id, "use_existing");
 }
-if (status.decision_required) await mitra.files.duplicate(file.id, "replace");
+console.log(file.status, file.ready);
 ```
 
-See [Upload a file](../guides/upload-file.md).
+`onDuplicate` is `"ask"` (the default: an identical file waits for your decision) or `"keep_both"`. By default `upload` waits, up to `wait` seconds (default 300), until the file is `ready`, `failed`, `needs_attention` or waiting for a decision; on timeout it returns the file as it stands. `background: true` returns right after the upload and you poll `files.get` yourself. See [Upload a file](../guides/upload-file.md).
 
 ### Gems
 
 | Method | Endpoint |
 |---|---|
 | `gems.list({ source_id? })` | `GET /gems`, returns `{ state, gems, generated_at }` |
-| `gems.get(id)` | `GET /gems/{id}` |
-| `gems.image(id, opts?)` | `GET /gems/{id}/image.png`, returns `Uint8Array` |
-| `gems.generate(source)` | `POST /gems/generate`, returns a `Job`. `source` is an id or `{ source_id }` |
+| `gems.get(id, sourceId?)` | `GET /gems/{id}` |
+| `gems.image(id, sourceId?, opts?)` | `GET /gems/{id}/image.png`, returns `Uint8Array` |
+| `gems.generate(source?, { wait?, background? })` | `POST /gems/generate`, returns the finished `Job` (result `{ source_id, state, gem_count }`). `source` is an id or `{ source_id }`; omit it for the active source |
 
 ```ts
 const { gems } = await mitra.gems.list({ source_id: "src_1" });
 const png = await mitra.gems.image(gems[0].id);
 
-const job = await mitra.gems.generate("src_1");
-await mitra.jobs.wait(job);
+const job = await mitra.gems.generate("src_1");   // waits (up to 10 minutes by default)
+console.log(job.result?.gem_count);
 ```
 
-`gems.image` fetches the bytes with your credential. If the picture is still rendering, the API answers with a job; the SDK waits for it (up to `waitTimeoutMs`, default 5 minutes) and downloads the result from its signed URL. See [Gems feed](../guides/gems-feed.md).
+`generate` sends `Prefer: wait=N` and polls until the job ends or `wait` seconds (default 600) pass, then throws `JobTimeoutError` (the job keeps running). With `background: true` it returns the queued `Job`; finish it with `jobs.wait` or the `gems.ready` webhook. See [Gems feed](../guides/gems-feed.md).
 
 ### Dashboards
 
 | Method | Endpoint |
 |---|---|
 | `dashboards.list()` | `GET /dashboards`, returns `{ dashboards }` |
-| `dashboards.get(id)` | `GET /dashboards/{id}` |
-| `dashboards.image(id)` | `POST /dashboards/{id}/image`, returns a `Job` whose result is `{ image_url, width, height }` |
-| `dashboards.imageBytes(id, opts?)` | `GET /dashboards/{id}/image.png`, returns `Uint8Array`, waiting for a render when none is cached |
+| `dashboards.get(id)` | `GET /dashboards/{id}`, with `widgets` |
+| `dashboards.image(id, { width?, wait?, background? })` | `POST /dashboards/{id}/image`, returns the finished `Job` whose result is `{ image_url, width, height }`. `width` is 400 to 3200 (default 1600) |
+| `dashboards.imageBytes(id, { width?, waitTimeoutMs? })` | `GET /dashboards/{id}/image.png`, returns `Uint8Array`, waiting for a render when none is cached |
 
 ```ts
 const { dashboards } = await mitra.dashboards.list();
@@ -258,18 +259,17 @@ See [Dashboard image previews](../guides/dashboard-previews.md).
 
 ### Predictions
 
-`predictions.create({ question, source_id?, conversation_id? })` calls `POST /predictions` (scope `predict`) and returns `Job<PredictionResult>`. It can take up to 30 minutes.
+`predictions.create({ question, source_id?, conversation_id?, language? }, { wait?, background? })` calls `POST /predictions` (scope `predict`) and returns the finished `Job<PredictionResult>`. It can take up to 30 minutes, so the default `wait` is 1860 seconds; `background: true` returns the queued job at once.
 
 ```ts
 const job = await mitra.predictions.create({
   question: "Forecast monthly revenue for the next 6 months",
   source_id: "src_1",
 });
-const done = await mitra.jobs.wait(job, { onProgress: (j) => console.log(j.state) });
-console.log(done.result?.answer, done.result?.attachments);
+console.log(job.result?.answer);
 ```
 
-`PredictionResult` is `{ answer, attachments, image_url? }`. Attachment `type` is `forecast`, `table`, `model` or `what_if`. See [Predictive questions](../guides/predictive.md).
+`PredictionResult` is `{ conversation_id, answer }`; keep the `conversation_id` to ask a follow-up in the same conversation. See [Predictive questions](../guides/predictive.md).
 
 ### Jobs
 
@@ -292,7 +292,7 @@ console.log(done.result?.answer, done.result?.attachments);
 | `signal`, `workspaceId`, `language`, `maxRetries` | | As in `RequestOptions` |
 
 ```ts
-const job = await mitra.predictions.create({ question: "Forecast Q4 revenue" });
+const job = await mitra.predictions.create({ question: "Forecast Q4 revenue" }, { background: true });
 const done = await mitra.jobs.wait(job, {
   timeoutMs: 35 * 60_000,
   onProgress: (j) => console.log(j.state),
@@ -333,21 +333,22 @@ Needs `webhooks:manage` and an admin member. See the [webhooks guide](../guides/
 | `members.list()` | `GET /members` | `members:read` |
 | `members.update(id, { role })` | `PATCH /members/{id}` | `members:manage` |
 | `members.remove(id)` | `DELETE /members/{id}` | `members:manage` |
-| `invitations.create({ email? \| phone?, role })` | `POST /invitations` | `members:manage` |
+| `invitations.create({ email? \| phone?, role?, whatsappOnly? })` | `POST /invitations` | `members:manage` |
 | `invitations.list()` | `GET /invitations` | `members:read` |
 | `invitations.revoke(id)` | `DELETE /invitations/{id}` | `members:manage` |
 
 ```ts
 const { members } = await mitra.members.list();
-await mitra.invitations.create({ email: "teammate@example.com", role: "member" });
-await mitra.invitations.create({ phone: "+910000000000", role: "member" });
+await mitra.invitations.create({ email: "teammate@example.com", role: "user" });
+const inv = await mitra.invitations.create({ phone: "+910000000000", role: "viewer" });
+if (inv.join_code) console.log(inv.join_message); // WhatsApp delivery failed: share it yourself, shown once
 ```
 
-`invitations.create` rejects with a `TypeError` when neither `email` nor `phone` is given. Roles are `owner`, `admin`, `member` or another string the workspace defines; take valid values from `members.list()`. See [Invite members](../guides/invite-members.md).
+`invitations.create` rejects with a `TypeError` when neither `email` nor `phone` is given. The roles you can give are `admin`, `user` (the default) and `viewer`; `owner` is never givable. See [Invite members](../guides/invite-members.md).
 
 ### Conversations
 
-`conversations.list()` returns `{ conversations }`; `conversations.get(id)` returns one conversation.
+`conversations.list()` returns `{ conversations }`; `conversations.get(id)` returns one conversation with its `messages`.
 
 ### Endpoints without a method: `raw`
 
@@ -368,7 +369,7 @@ The client retries up to `maxRetries` times (default 2), waiting for `Retry-Afte
 | Network error or timeout | Same rule as `5xx` |
 | Other `4xx` | Never |
 
-`ask`, `askStream`, `askAudio`, `gems.generate`, `dashboards.image` and `predictions.create` generate an `Idempotency-Key` (once per call, shared by its retries) so a retry is never charged twice. Pass `idempotencyKey` to choose it yourself, for example to survive a process restart. Use a fresh key for a new logical request.
+`ask`, `askStream`, `askAudio` and `predictions.create` generate an `Idempotency-Key` (once per call, shared by its retries). The server honours the key on `POST /ask` and `POST /predictions` only, so on those two a retry answers once and is charged once. Pass `idempotencyKey` to choose it yourself, for example to survive a process restart. Use a fresh key for a new logical request. Other `POST` calls (such as `sources.create` or `gems.generate`) are not retried on `5xx`, because repeating them could do the work twice.
 
 ## Errors
 
@@ -376,11 +377,11 @@ Every API failure throws a subclass of `MitraError`, chosen from the HTTP status
 
 | Class | Status | Typical `category` | Extra fields |
 |---|---|---|---|
-| `AuthError` | 401 | `auth` | |
+| `AuthError` | 401 | `authentication` | |
 | `CreditsError` | 402 | `not_ready`, `member_cap` | |
 | `PermissionError` | 403 | `scope`, `workspace_role`, `source_access` | |
 | `BusyError` | 409 | `busy` | |
-| `SourceTestFailedError` | 422 from `sources.create` | `source_test` | `testResult` |
+| `SourceTestFailedError` | 422 from `sources.create` | `connection` | `testResult` |
 | `RateLimitError` | 429 | `rate_limit` | `retryAfter` (seconds) |
 | `ConnectionError` | 0 | `network`, `timeout` | `cause` |
 | `JobFailedError` | 0 | the job's error category, or its state | `job` |
