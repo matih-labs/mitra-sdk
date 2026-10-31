@@ -1,0 +1,143 @@
+# Hosted developer docs for the Matih public API, served at https://mitra-sdk.matih.ai/.
+# CI builds it (.github/workflows/docs.yml); `strict: true` makes a broken link fail the build.
+site_name: Matih API
+site_description: Build chat bots, integrations and agents on Matih with the REST API, the Python and TypeScript SDKs, the hosted MCP server and signed webhooks.
+site_author: Matih Labs
+site_url: https://mitra-sdk.matih.ai/
+repo_url: https://github.com/matih-labs/mitra-sdk
+repo_name: matih-labs/mitra-sdk
+edit_uri: edit/main/site/
+copyright: Copyright &copy; Matih Labs. Apache-2.0.
+
+docs_dir: site
+# Not `site`: that is docs_dir. The workflow ships this folder to GitHub Pages.
+site_dir: _site
+use_directory_urls: true
+strict: true
+exclude_docs: |
+  requirements.txt
+
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+
+plugins:
+  - search
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/matih-labs/mitra-sdk
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: "."
+      check_paths: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.keys
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Concepts:
+      - concepts/workspaces.md
+      - concepts/credentials.md
+      - concepts/scopes.md
+      - concepts/sync-async.md
+      - concepts/jobs.md
+      - concepts/credits.md
+      - concepts/languages.md
+      - concepts/images.md
+      - concepts/errors.md
+      - concepts/rate-limits.md
+  - Guides:
+      - Bots:
+          - guides/slack-bot.md
+          - guides/chat-bot.md
+      - Data:
+          - guides/connect-source.md
+          - guides/upload-file.md
+      - Insights:
+          - guides/gems-feed.md
+          - guides/dashboard-previews.md
+          - guides/predictive.md
+      - Languages:
+          - guides/multilingual.md
+          - guides/voice.md
+      - Platform:
+          - guides/webhooks.md
+          - guides/invite-members.md
+          - guides/switch-workspaces.md
+          - guides/oauth.md
+  - MCP:
+      - mcp/index.md
+      - mcp/claude-code.md
+      - mcp/claude-desktop.md
+      - mcp/cursor.md
+      - mcp/vscode.md
+      - mcp/tools.md
+      - Agent skill: skill.md
+  - Reference:
+      - SDK reference:
+          - sdk/python.md
+          - sdk/typescript.md
+      - API reference: api-reference.md
+      - Security: security.md
+      - Changelog: changelog.md
