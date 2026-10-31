@@ -1,0 +1,78 @@
+# Builds the developer docs (mkdocs.yml, pages in site/) and publishes them to GitHub Pages,
+# served at https://mitra-sdk.matih.ai/ (site/CNAME).
+#
+# Pull requests and pushes to main build with `--strict`, so a broken link or a bad snippet
+# path fails the check. Only main deploys. The build job holds read-only repository access;
+# the Pages deploy token is minted for the deploy job alone.
+name: docs
+
+on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+      # Pages embed files from these with pymdownx.snippets.
+      - "examples/**"
+      - "sdks/**"
+      - "skills/**"
+      - "mcp/**"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The checkout token is not needed past this step and must not linger in
+          # .git/config, where anything that later archives the workspace would carry
+          # it off. (zizmor: artipacked.)
+          persist-credentials: false
+      # The organisation refuses any action not pinned to a commit SHA. No
+      # actions/setup-python is pinned in the sibling repository, so uv provides Python and
+      # installs the pinned requirements into a throwaway environment.
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: "Build the site (strict, so a broken link fails the build)"
+        run: |
+          uv venv "$RUNNER_TEMP/docs-venv"
+          uv pip install --python "$RUNNER_TEMP/docs-venv/bin/python" -r site/requirements.txt
+          "$RUNNER_TEMP/docs-venv/bin/mkdocs" build --strict
+      - name: Check the custom domain file reached the build
+        run: test "$(cat _site/CNAME)" = "mitra-sdk.matih.ai"
+      # Not actions/upload-pages-artifact: it is a composite action that calls
+      # actions/upload-artifact by tag, and the organisation refuses any action not pinned
+      # to a commit SHA - nested ones included. This is the same tar it would have built.
+      - name: Package the site for Pages
+        if: github.event_name != 'pull_request'
+        run: tar --dereference --hard-dereference --directory _site -cf "$RUNNER_TEMP/artifact.tar" .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.event_name != 'pull_request'
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
