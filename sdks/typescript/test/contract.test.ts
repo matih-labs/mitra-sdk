@@ -130,7 +130,7 @@ describe("workspaces, conversations, errors", () => {
     );
     const c = makeClient(m.fetch);
     expect((await c.conversations.list()).conversations[0]?.message_count).toBe(2);
-    expect((await c.conversations.get("c1")).messages[0]?.text).toBe("hi");
+    expect((await c.conversations.get("c1")).messages?.[0]?.text).toBe("hi");
   });
 
   it("402 not_ready is a CreditsError", async () => {

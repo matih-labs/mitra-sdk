@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { JobFailedError, JobTimeoutError, type Answer, type Job } from "../src/index.js";
+import { JobFailedError, JobTimeoutError, type Answer } from "../src/index.js";
 import { ANSWER, fileBody, jobBody, jsonResponse, makeClient, sequence, sourceBody, sourceCreatedBody } from "./helpers.js";
 
 const BASE = "https://workspace.matih.ai/api/v1";
@@ -97,7 +97,7 @@ describe("job calls: sync (wait) and background", () => {
       jsonResponse(jobBody("succeeded", { result: { image_url: "https://workspace.matih.ai/i", width: 1, height: 1 } })),
     );
     const c = makeClient(m.fetch);
-    const queued: Job = await c.dashboards.image("d1", { background: true });
+    const queued = await c.dashboards.image("d1", { background: true });
     const done = await c.jobs.wait(queued, { timeout: 5, ...FAST });
     expect(done.state).toBe("succeeded");
   });
