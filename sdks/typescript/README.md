@@ -84,21 +84,26 @@ console.log(answer.heard?.transcript, answer.answer);
 
 `askAudio` accepts `{ conversationId, sourceId, language, filename, contentType }`.
 
-## Long-running work: jobs
+## Sync vs async
 
-Gem generation, predictions and dashboard renders return a job. Wait for it, with progress and a timeout:
+Everything is promise-based. Long calls (`gems.generate`, `predictions.create`, `dashboards.image`, `sources.create`, `files.upload`) have two modes:
+
+- **Wait** (default): sends `Prefer: wait=N` (capped at what the server honours, 60 s, 120 s for sources) and, when the server answers `202` with a job, polls it until it finishes. `wait` is the total time in seconds (default 10 minutes for Gems, 5 for images, sources and files, 31 for predictions); running past it throws `JobTimeoutError` and the job keeps running.
+- **Background**: `{ background: true }` returns right away with the queued job (for `sources.create` and `files.upload`, whatever the server answered).
 
 ```ts
-const job = await mitra.predictions.create({ question: "Forecast sales for next quarter" });
+const done = await mitra.predictions.create({ question: "Forecast Q4" }, { wait: 900, onProgress: (j) => console.log(j.state) });
 
-const done = await mitra.jobs.wait(job, {
-  timeoutMs: 35 * 60_000,
-  onProgress: (j) => console.log(j.state),
-});
-console.log(done.result);
+const job = await mitra.predictions.create({ question: "Forecast Q4" }, { background: true });
+const later = await mitra.jobs.wait(job, { timeout: 900 });   // seconds; or timeoutMs
+console.log(later.result);
+
+// ask can be asynchronous too (Prefer: respond-async); the job's result is the Answer
+const queued = await mitra.ask("Top customers this year", { background: true });
+const answer = (await mitra.jobs.wait<Answer>(queued, { timeout: 120 })).result;
 ```
 
-`jobs.wait` polls with backoff. It throws `JobFailedError` for failed or cancelled jobs (pass `throwOnFailure: false` to get the job back instead) and `JobTimeoutError` when the wait runs out; the job keeps running. Use `mitra.jobs.get(id)` and `mitra.jobs.cancel(id)` directly if you prefer.
+`jobs.wait` polls with backoff. It throws `JobFailedError` for failed or cancelled jobs (pass `throwOnFailure: false` to get the job back instead) and `JobTimeoutError` when the wait runs out. Use `mitra.jobs.get(id)` and `mitra.jobs.cancel(id)` directly if you prefer.
 
 ## Gems and dashboards
 

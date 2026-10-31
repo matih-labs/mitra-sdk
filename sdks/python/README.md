@@ -71,13 +71,14 @@ for event in client.ask_stream("Top 5 products by revenue"):
 gems = client.gems.list(source_id="src_1")
 png = client.gems.image(gems.gems[0].id)                  # bytes
 
-job = client.gems.generate("src_1")                        # 202 Job
-job = client.jobs.wait(job)                                # polls with backoff
+job = client.gems.generate("src_1")                        # waits, returns the finished Job
+job = client.gems.generate("src_1", background=True)       # returns the queued Job at once
+job = client.jobs.wait(job, 600)                           # poll it later
 
 dashboards = client.dashboards.list()
 png = client.dashboards.render(dashboards.dashboards[0].id)   # job + wait + download
 
-job = client.predictions.run("Forecast next quarter's revenue", source_id="src_1")
+job = client.predictions.create("Forecast next quarter's revenue", source_id="src_1")
 print(job.result["answer"], job.result.get("attachments"))
 ```
 
@@ -133,6 +134,35 @@ if not verify_webhook(secret, request.headers["Matih-Signature"], raw_body):  # 
 # assert_webhook(...) is the same check but raises WebhookVerificationError with the reason.
 ```
 
+## Sync vs async
+
+Two independent choices: the client (`Mitra` blocks the thread, `AsyncMitra` is awaited) and the
+mode of each long call (wait for the result, or get a job back and come back later). Both
+clients have the same methods, including members, sources, files, webhooks, voice and jobs.
+
+Every long call (`gems.generate`, `predictions.create`, `dashboards.image`, `sources.create`,
+`files.upload`) takes:
+
+- `wait=` seconds (default 10 minutes for Gems, 5 for images, sources and files, 31 for
+  predictions). The SDK sends `Prefer: wait=N` (capped at what the server honours: 60 s, 120 s for
+  sources), and if the server answers `202` with a Job it polls that job until it finishes or
+  `wait` runs out (`JobTimeoutError`, the job keeps running).
+- `background=True` to return right away: the queued `Job`, or for `sources.create` and
+  `files.upload` whatever the server answered. No `Prefer: wait` is sent.
+
+```python
+job = client.predictions.create("Forecast Q4", wait=900)               # blocks, finished Job
+job = client.predictions.create("Forecast Q4", background=True)        # returns immediately
+job = client.jobs.wait(job.id, 900)                                    # later, or from another process
+
+queued = client.ask("Top customers this year", background=True)        # Prefer: respond-async
+done = client.jobs.wait(queued.id, 120)
+answer = done.as_answer()                                              # the Answer held in job.result
+```
+
+Without `background=True`, `ask` answers in one call. `predictions.run` and
+`dashboards.render` are shortcuts for the waiting form (`render` also downloads the PNG).
+
 ## Async
 
 ```python
@@ -142,6 +172,8 @@ from mitra import AsyncMitra
 async def main():
     async with AsyncMitra(api_key="mtk_...") as client:
         answer = await client.ask("How many orders today?")
+        job = await client.predictions.create("Forecast Q4", background=True)
+        job = await client.jobs.wait(job.id, 900)
         async for event in client.ask_stream("Top customers"):
             print(event.event)
 

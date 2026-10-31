@@ -19,3 +19,8 @@ All notable changes are listed here. Python and TypeScript SDKs are versioned in
 - Docs: admins create keys under `Settings > API & MCP`, choose the products a key may use (all on
   by default) and revoke keys there. Keys never expire by default. Two kinds: an API key (all of
   `/api/v1`) and an MCP connector key (only `/api/v1/mcp`, 403 elsewhere).
+- Sync and async everywhere: `Prefer: wait=N` and `Prefer: respond-async` supported by the API.
+  Both SDKs: every long call (`gems.generate`, `predictions.create`, `dashboards.image`,
+  `sources.create`, `files.upload`) takes `wait` (seconds) or `background`; `ask` takes
+  `background`; `jobs.wait(job, timeout)` polls; `Job.as_answer()` in Python. Python keeps `Mitra`
+  and `AsyncMitra` at full parity.

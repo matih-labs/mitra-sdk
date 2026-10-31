@@ -53,6 +53,23 @@ const answer = await client.ask("What were last month's sales by region?");
 console.log(answer.answer);
 ```
 
+## Sync vs async
+
+Quick questions are one request. Work that takes longer (Gem generation, forecasts, dashboard
+images, connecting a source, processing a file) can be waited for or run in the background, and
+the API supports both with standard `Prefer` headers (RFC 7240):
+
+| You want | Send | You get |
+|---|---|---|
+| Wait up to N seconds | `Prefer: wait=N` (or `?wait=N`), N up to 60, 120 for `POST /sources` | `200` or `201` if done in time, otherwise `202` with a Job to poll; `Preference-Applied` says what was honoured |
+| Answer later | `Prefer: respond-async` on `POST /ask` | `202` with a Job of kind `ask`; its `result` is the Answer |
+| Nothing special | no header | the behaviour documented per endpoint |
+
+Both SDKs wrap this: every long call takes `wait` (seconds) and `background`, and `jobs.wait`
+polls a job. Python has `Mitra` (sync) and `AsyncMitra` at full parity; TypeScript is
+promise-based. See `sdks/python/README.md` and `sdks/typescript/README.md`, and
+`examples/http/` for the raw HTTP version in six languages.
+
 ## Layout
 
 | Path | Contents |
@@ -62,6 +79,7 @@ console.log(answer.answer);
 | `sdks/typescript/` | `@matihlabs/mitra`: typed client on openapi-fetch, SSE streaming |
 | `skills/matih/` | Agent skill (`SKILL.md` and references) for using Matih from an AI agent |
 | `mcp/` | Connect Claude, Cursor, VS Code, ChatGPT and others to the hosted MCP endpoint |
+| `examples/http/` | Plain-HTTP examples in Java, Go, JavaScript, C#, PHP and Ruby, with webhook verification |
 | `examples/curl/` | Copy-paste curl recipes for every endpoint |
 | `examples/slack-bot/` | Reference Slack bot (Socket Mode) built on the Python SDK |
 
