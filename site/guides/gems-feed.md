@@ -20,13 +20,14 @@ export BASE=https://workspace.matih.ai/api/v1
   "state": "ready",
   "gems": [
     {
-      "id": "gem_1",
+      "id": "gem_7f3a9c",
       "kind": "trend",
       "headline": "Weekend sales are up 14%",
-      "explanation": "...",
-      "figures": [],
+      "explanation": "Saturday and Sunday orders grew faster than weekdays over the last four weeks.",
+      "figures": [{"label": "Weekend sales", "value": "4.2 lakh"}],
       "question": "How did weekend sales change?",
-      "image_url": "https://workspace.matih.ai/api/v1/media/....png",
+      "source_id": "c_8f2",
+      "image_url": "https://workspace.matih.ai/api/v1/media/0f1e...6978.png",
       "created_at": "2026-10-30T09:00:00Z"
     }
   ],
@@ -34,7 +35,7 @@ export BASE=https://workspace.matih.ai/api/v1
 }
 ```
 
-`state` says whether Gems exist for the source (none yet, generating, or ready). Always check it before assuming an empty `gems` list means nothing was found.
+`state` is one of `none` (nothing yet: start [generation](#generate-new-gems)), `running`, `ready`, `partial`, `empty`, `insufficient`, `failed`, `not_ready` (the source is still being read) or `no_source`. `ready` and `partial` are usable. Always check it before assuming an empty `gems` list means nothing was found. Each Gem's `image_url` is public and expires after about 15 minutes, so fetch it when you need it rather than storing it.
 
 === "curl"
 
@@ -215,19 +216,18 @@ Every Gem has an `image_url`: a signed, short-lived URL (15 minutes, no auth hea
     await writeFile("gem.png", png);
     ```
 
-`gems.image` fetches with your credential and, if the picture is not rendered yet, waits for it.
+`gems.image` fetches `GET /gems/{id}/image.png` with your credential. It is a `404` when the Gem has nothing worth drawing, so treat a missing picture as normal.
 
 ## Generate new Gems
 
-`POST /gems/generate` starts a Job (`kind: "gems"`) and returns `202`. It spends credits, so only do it when a person asked or the list is empty and they want Gems. The SDKs send an `Idempotency-Key` automatically.
+`POST /gems/generate` starts a Job (`kind: "gems"`) and returns `202`; add `?wait=30` (or `Prefer: wait=30`, up to 60) to get the finished Job back in one call when it is quick. It spends credits, so only do it when a person asked or the list is empty and they want Gems. Gems are written for one source; the body is `{"source_id"}` and is optional (the active source is used).
 
 === "curl"
 
     ```bash
     curl -s -H "Authorization: Bearer $MATIH_API_KEY" -H 'Content-Type: application/json' \
-      -H "Idempotency-Key: $(uuidgen)" \
       -d '{"source_id": "SOURCE_ID"}' $BASE/gems/generate
-    # 202 {"id": "job_...", "kind": "gems", "state": "queued", ...}
+    # 202 {"id": "9b1d4c0e7a2f4c1e8d3b5a6f70e1c2d3", "kind": "gems", "state": "queued", ...}
 
     # Then poll
     curl -s -H "Authorization: Bearer $MATIH_API_KEY" $BASE/jobs/JOB_ID
@@ -239,8 +239,9 @@ Every Gem has an `image_url`: a signed, short-lived URL (15 minutes, no auth hea
     from mitra import Mitra
 
     client = Mitra()
-    job = client.gems.generate("SOURCE_ID")           # 202 Job
-    job = client.jobs.wait(job, timeout=900)          # polls with backoff
+    job = client.gems.generate("SOURCE_ID")           # waits (up to 10 minutes) and returns the finished Job
+    # or: job = client.gems.generate("SOURCE_ID", background=True)  # the queued Job at once
+    #     job = client.jobs.wait(job, 900)                         # poll it later
     listing = client.gems.list(source_id="SOURCE_ID")
     ```
 
@@ -252,8 +253,7 @@ Every Gem has an `image_url`: a signed, short-lived URL (15 minutes, no auth hea
 
     async def main():
         async with AsyncMitra() as client:
-            job = await client.gems.generate("SOURCE_ID")
-            job = await client.jobs.wait(job, timeout=900)
+            job = await client.gems.generate("SOURCE_ID")  # waits and returns the finished Job
             listing = await client.gems.list(source_id="SOURCE_ID")
             print(listing.state, len(listing.gems))
 
@@ -278,7 +278,6 @@ Every Gem has an `image_url`: a signed, short-lived URL (15 minutes, no auth hea
     const headers = {
       Authorization: `Bearer ${process.env.MATIH_API_KEY}`,
       "Content-Type": "application/json",
-      "Idempotency-Key": crypto.randomUUID(),
     };
     let job = await (await fetch(`${BASE}/gems/generate`, {
       method: "POST", headers, body: JSON.stringify({ source_id: "SOURCE_ID" }),
@@ -306,7 +305,7 @@ client = Mitra()
 SLACK_URL = os.environ["SLACK_WEBHOOK_URL"]
 
 listing = client.gems.list(source_id=os.environ["MATIH_SOURCE_ID"])
-if listing.state != "ready" or not listing.gems:
+if listing.state not in ("ready", "partial") or not listing.gems:
     raise SystemExit(f"no Gems to post (state: {listing.state})")
 
 lines = [f"*{g.headline}*\n{g.explanation}" for g in listing.gems[:3]]
