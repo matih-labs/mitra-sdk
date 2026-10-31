@@ -8,12 +8,12 @@
 #   ruby example.rb --skip-predict
 #   ruby example.rb --background          (predict without Prefer: wait, start a job and poll it)
 #   ruby example.rb --upload ./sales.csv
-#   ruby example.rb --invite teammate@example.com --role ROLE   (admin action, never runs by default)
+#   ruby example.rb --invite teammate@example.com --role user   (admin action, never runs by default)
 #
 # Environment:
 #   MATIH_API_KEY       required. Create one under Settings › API & MCP in Matih.
 #   MATIH_BASE_URL      optional. Default https://workspace.matih.ai ("/api/v1" is appended).
-#   MATIH_ON_DUPLICATE  optional. Passed as the on_duplicate form field of the file upload.
+#   MATIH_ON_DUPLICATE  optional. The on_duplicate form field of the file upload: ask (default) or keep_both.
 #
 # Teaching example. Do not commit your API key.
 
@@ -52,7 +52,7 @@ class MatihClient
   end
 
   # One request. On a 429 it honours Retry-After once and retries with the same
-  # Idempotency-Key, so a credit-costing call is never charged twice.
+  # headers (the server honours Idempotency-Key on /ask and /predictions).
   #
   # json:     a Hash sent as the JSON body
   # form:     an Array of Net::HTTP set_form entries, sent as multipart/form-data
@@ -153,9 +153,9 @@ WAIT_SECONDS = 30
 
 # Sync with a bounded wait: "Prefer: wait=N" (N up to 60 seconds).
 # Works on POST /gems/generate, /predictions and /dashboards/{id}/image. The server answers
-# 200 or 201 when the work finished within N seconds, otherwise 202 with a Job. Either way
-# this returns the result Hash; on 202 it falls back to polling the job.
-# If a finished answer carries a Job (it has a "state"), its result field is used.
+# 200 with the finished Job when the work finished within N seconds, otherwise 202 with the
+# Job as it stands. Either way this returns the result Hash; on 202 it falls back to polling
+# the job. A finished answer is a Job (it has a "state"), and its result field is used.
 def run_with_wait(client, path, payload: nil, idempotency_key: nil, first:, max:, timeout:)
   headers = { 'Prefer' => "wait=#{WAIT_SECONDS}" }
   headers['Idempotency-Key'] = idempotency_key if idempotency_key
@@ -227,7 +227,7 @@ end
 # (3) Dashboard image job
 # ---------------------------------------------------------------------------
 # Sync-with-fallback: wait=N, and if the job is still running, poll GET /jobs/{id}
-# with a growing delay. image_url is a signed URL valid for about 15 minutes that
+# with a growing delay. image_url is a public, unguessable URL that expires after 15 minutes and
 # needs no Authorization header.
 def dashboard_image(client)
   dashboards = client.request(:get, '/dashboards')['dashboards'] || []
@@ -245,12 +245,12 @@ end
 # ---------------------------------------------------------------------------
 # (4) Predict
 # ---------------------------------------------------------------------------
-# A prediction can run for up to 30 minutes. Poll every 5 to 10 seconds.
-# Webhooks (prediction.completed) avoid polling.
+# A prediction usually takes one to five minutes; the server gives up after 30.
+# Poll every 5 to 10 seconds. Webhooks (prediction.completed) avoid polling.
+# A finished prediction's result is {conversation_id, answer}; answer is a string.
 def print_prediction(result)
   puts "answer: #{result['answer']}"
-  (result['attachments'] || []).each { |attachment| puts "  attachment: #{attachment['type']}" }
-  puts "image_url: #{result['image_url']}" if result['image_url']
+  puts "conversation_id: #{result['conversation_id']} (pass it to POST /predictions to continue)"
 end
 
 # Sync-with-fallback: wait=N, then poll on 202.
@@ -278,7 +278,7 @@ end
 def list_sources(client)
   sources = client.request(:get, '/sources')['sources'] || []
   sources.each do |s|
-    puts "  #{s['id']}  #{s['name']}  type=#{s['type']}  status=#{s['status']}  active=#{s['active']}"
+    puts "  #{s['id']}  #{s['name']}  connector_type=#{s['connector_type']}  state=#{s['state']}  active=#{s['is_active']}"
   end
   puts 'no sources yet' if sources.empty?
 end
@@ -305,28 +305,37 @@ def upload_file(client, path)
     on_duplicate = ENV['MATIH_ON_DUPLICATE']
     form << ['on_duplicate', on_duplicate] if on_duplicate && !on_duplicate.empty?
     form << ['file', file, { filename: File.basename(path), content_type: content_type }]
-    uploaded = client.request(:post, '/files', form: form)
+    # A file is a File, not a Job. "Prefer: wait=30" (up to 120) holds the request until it
+    # is ready; if processing is still running the answer is 202.
+    uploaded = client.request(:post, '/files', form: form, headers: { 'Prefer' => 'wait=30' })
   ensure
     file&.close
   end
 
-  puts "uploaded: #{uploaded['id']} status=#{uploaded['status']}"
-  # Processing is asynchronous. Needs the files:read scope to follow it.
+  puts "uploaded: #{uploaded['id']} status=#{uploaded['status']} ready=#{uploaded['ready']}"
+  # Follow it with GET /files/{id} (needs files:read) until Ask can use it, it needs
+  # attention or failed, or it waits for a duplicate decision.
+  settled = lambda do |f|
+    f['ready'] || f['decision_required'] || %w[needs_attention failed].include?(f['status'])
+  end
   40.times do
-    break unless uploaded['status'] == 'processing'
+    break if settled.call(uploaded)
 
     sleep(3)
     uploaded = client.request(:get, "/files/#{URI.encode_www_form_component(uploaded['id'])}")
-    puts "  status=#{uploaded['status']}"
+    puts "  status=#{uploaded['status']} ready=#{uploaded['ready']}"
   end
   puts JSON.pretty_generate(uploaded)
-  puts 'the file needs a decision (duplicate handling); see POST /files/{id}/duplicate' if uploaded['decision_required']
+  if uploaded['decision_required']
+    puts "the file is a duplicate and waits for a decision (#{Array(uploaded['decision_options']).join(', ')}); " \
+         'see POST /files/{id}/duplicate'
+  end
 end
 
 # ---------------------------------------------------------------------------
 # (7) Invite a member (admin action, members:manage)
 # ---------------------------------------------------------------------------
-# Only runs when you pass --invite. Valid role values come from GET /members.
+# Only runs when you pass --invite. role is viewer, user or admin (never owner).
 def invite_member(client, target, role)
   key = target.include?('@') ? 'email' : 'phone'
   invitation = client.request(:post, '/invitations', json: { key => target, 'role' => role })
@@ -360,9 +369,9 @@ def main(args)
 
   upload_path = option_value(args, '--upload')
   invite_target = option_value(args, '--invite')
-  invite_role = option_value(args, '--role')
-  if invite_target && invite_role.nil?
-    warn '--invite needs --role ROLE (valid values come from GET /members)'
+  invite_role = option_value(args, '--role') || 'user'
+  if invite_target && !%w[viewer user admin].include?(invite_role)
+    warn '--role must be viewer, user or admin'
     return 2
   end
 
