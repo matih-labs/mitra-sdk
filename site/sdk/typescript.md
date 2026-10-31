@@ -382,7 +382,7 @@ Every API failure throws a subclass of `MitraError`, chosen from the HTTP status
 | `PermissionError` | 403 | `scope`, `workspace_role`, `source_access` | |
 | `BusyError` | 409 | `conflict` | |
 | `SourceTestFailedError` | 422 from `sources.create` | `connection` | `testResult` |
-| `RateLimitError` | 429 | `rate_limit` | `retryAfter` (seconds) |
+| `RateLimitError` | 429 | `rate_limited` | `retryAfter` (seconds) |
 | `ConnectionError` | 0 | `network`, `timeout` | `cause` |
 | `JobFailedError` | 0 | the job's error category, or its state | `job` |
 | `JobTimeoutError` | 0 | `timeout` | `jobId`, `timeoutMs`, `job` |

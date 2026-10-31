@@ -445,7 +445,7 @@ Every API error derives from `MitraError`. The class is chosen from the HTTP sta
 | `PermissionDeniedError` | 403 | `scope`, `workspace_role`, `source_access` | |
 | `BusyError` | 409 | `conflict` | |
 | `SourceTestFailedError` | 422 from `sources.create` | `connection` | `test_result` |
-| `RateLimitError` | 429 | `rate_limit` | `retry_after` (seconds, or `None`) |
+| `RateLimitError` | 429 | `rate_limited` | `retry_after` (seconds, or `None`) |
 | `JobFailedError` | job `failed` or `cancelled` | | `job` |
 | `JobTimeoutError` | `jobs.wait` timed out | | `job` |
 | `MitraError` | anything else, and network failures | | |

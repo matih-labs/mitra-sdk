@@ -32,13 +32,9 @@ Two things do not use this envelope: a request that fails validation is a plain 
 | 422 | (none) | Validation failed: `detail` is a list of `{loc, msg, type}`. | Fix the field in `loc`; do not retry unchanged. |
 | 422 | `connection` | `POST /sources`: the connection test failed. Nothing was saved; `detail.test` has the result. | Fix the connection details. |
 | 422 | `validation`, `not_heard` | A webhook URL or events list is invalid; a recording had no speech. | Fix the request. |
-| 429 | `rate_limit` | Too many requests. `Retry-After` gives seconds. | See [Rate limits](rate-limits.md). |
+| 429 | `rate_limited` | Too many requests. `Retry-After` gives seconds. | See [Rate limits](rate-limits.md). |
 | 500 | `internal` | Unexpected server error. | Retry up to three times with backoff; then report the time and the request. |
 | 503 | `unavailable`, `disabled`, `language_unavailable`, `speech_unavailable` | The public API, uploads, voice or the speech service is off or busy on this deployment. | Retry later. |
-
-!!! note "`rate_limit`"
-    The OpenAPI document calls the 429 category `rate_limited`; the server sends `rate_limit`. Branch on the
-    status code, not the category, for `429`.
 
 An HTTP `200` Answer with `status: "error"`, `"empty"`, `"clarification"` or `"cancelled"` is **not** an
 HTTP error. See the [Quickstart](../quickstart.md) for what to do with each. A question that fails, is

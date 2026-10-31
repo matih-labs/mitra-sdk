@@ -7,7 +7,7 @@ HTTP/1.1 429 Too Many Requests
 Retry-After: 7
 Content-Type: application/json
 
-{"detail": {"category": "rate_limit", "message": "Too many requests. Wait a moment and try again."}}
+{"detail": {"category": "rate_limited", "message": "Too many requests. Wait a moment and try again."}}
 ```
 
 `Retry-After` is the whole number of seconds to wait. Always read the header.
