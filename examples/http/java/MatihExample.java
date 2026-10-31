@@ -9,7 +9,7 @@
 //   java MatihExample.java --invite teammate@example.com --role ROLE   (admin action, never runs by default)
 //
 // Environment:
-//   MATIH_API_KEY       required. Create one under Settings, Integrations in Matih.
+//   MATIH_API_KEY       required. Create one under Settings › API & MCP in Matih.
 //   MATIH_BASE_URL      optional. Default https://workspace.matih.ai ("/api/v1" is appended).
 //   MATIH_ON_DUPLICATE  optional. Passed as the on_duplicate form field of the file upload.
 //

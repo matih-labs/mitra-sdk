@@ -16,7 +16,7 @@ All notable changes are listed here. Python and TypeScript SDKs are versioned in
 - Scopes: 13 in total. Files now use `files:read` (`GET /files`, `GET /files/{id}`) and
   `files:write` (`POST /files`, `POST /files/{id}/duplicate`, `DELETE /files/{id}`) instead of
   `sources:read` and `sources:write`.
-- Docs: admins create keys under `Settings > API & MCP`, choose the products a key may use (all on
+- Docs: admins create keys under `Settings › API & MCP`, choose the products a key may use (all on
   by default) and revoke keys there. Keys never expire by default. Two kinds: an API key (all of
   `/api/v1`) and an MCP connector key (only `/api/v1/mcp`, 403 elsewhere).
 - Sync and async everywhere: `Prefer: wait=N` and `Prefer: respond-async` supported by the API.
