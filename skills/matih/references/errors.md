@@ -20,6 +20,7 @@ Always read `detail.category` first, then `message`. `code` is optional. Failed 
 | 403 | `source_access` | The user cannot access that source, or the `source_id` belongs to another workspace. | Re-run `list_sources` for the current workspace and pick again. Ask the user if no source is permitted. |
 | 409 | `busy` | Another request in the same conversation or the same long task is already running. | Wait 3 to 5 seconds and retry the same request with the same `Idempotency-Key`. Give up after about a minute and tell the user. |
 | 429 | (rate limit) | Too many requests. `Retry-After` header gives seconds. | Wait at least that long, then retry once. Back off exponentially on repeats. |
+| 422 | (validation) | On `POST /sources`: the connection test failed, so the source was not created. The body carries the test result. On other endpoints: invalid field values. | Read the test result (host unreachable, bad credentials, missing permission, wrong database). Tell the user what failed without echoing secrets, fix the config together, and call `POST /sources/test` until it passes before `POST /sources` again. Do not retry unchanged. |
 | 4xx other | varies | Bad input (for example a missing field or an unknown id). | Fix the request. Do not retry unchanged. Read `message`. |
 | 5xx | varies | Server error. | Retry up to 3 times with backoff (2s, 5s, 10s) using the same `Idempotency-Key`. Then report the `request_id` if one is available. |
 

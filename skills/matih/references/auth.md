@@ -28,14 +28,16 @@ curl -s -H "Authorization: Bearer $MATIH_API_KEY" https://workspace.matih.ai/api
 | Scope | Allows |
 | --- | --- |
 | `workspaces:read` | list workspaces |
-| `sources:read` | list sources, connectors, files |
-| `sources:write` | test and add sources, upload files (admin role also required to add sources) |
+| `members:read` | list members and pending invitations |
+| `members:manage` | invite, change role, remove members, revoke invitations (admin role also required) |
+| `sources:read` | list sources and their readiness, connectors, files |
+| `sources:write` | test, add, activate, delete sources; upload, resolve duplicates of, delete files (admin role also required to add sources) |
 | `gems:read` | list and read gems and gem images |
 | `gems:generate` | generate gems |
 | `ask` | ask questions, conversations |
 | `dashboards:read` | list dashboards and render images |
 | `predict` | run predictions |
-| `webhooks:manage` | create, list, delete webhooks |
+| `webhooks:manage` | create, list, test, delete webhooks and read deliveries |
 
 Job polling (`GET /jobs/{id}`) is allowed for the credential that started the job. A missing scope returns 403 with category `scope`.
 

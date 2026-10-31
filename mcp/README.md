@@ -185,7 +185,11 @@ Replace the placeholder with your key from an environment variable or secret sto
 | --- | --- | --- |
 | `list_workspaces` | none | Lists workspaces you belong to and which is current. |
 | `use_workspace` | `workspace_id` | Sets your default workspace (OAuth sessions; API keys are pinned). |
+| `list_members` | none | Lists members of the current workspace with their roles. Needs `members:read`. |
+| `invite_member` | `email` or `phone`, `role` | Invites someone to the workspace. Needs `members:manage` and an admin role. Use only when explicitly asked. |
 | `list_sources` | none | Lists data sources with `id`, `name`, `type`, `status`, `active`. |
+| `source_status` | `source_id` | Returns one source's detail, including readiness. |
+| `list_files` | none | Lists uploaded files and their status. |
 | `ask` | `question`; optional `conversation_id`, `source_id`, `language` | Asks a question. Returns an answer with `status` (`answered`, `clarification`, `empty`, `error`), a result table, `sql`, `follow_ups`, `conversation_id`. |
 | `list_gems` | optional `source_id` | Lists insight cards for a source. |
 | `get_gem` | `gem_id` | Returns one gem, with its image. |
@@ -195,9 +199,11 @@ Replace the placeholder with your key from an environment variable or secret sto
 | `predict` | `question`; optional `source_id`, `conversation_id` | Starts a forecast, model or what-if. Returns a job, up to 30 minutes. |
 | `get_job` | `job_id` | Returns a job's `state`, `result` and `error`. |
 
-Argument names follow the REST API. Check the tool schema your client shows if a name differs. Required scopes: `workspaces:read`, `sources:read`, `ask`, `gems:read`, `gems:generate`, `dashboards:read`, `predict`.
+Argument names follow the REST API. Check the tool schema your client shows if a name differs. Scopes the tools use: `workspaces:read`, `members:read`, `members:manage`, `sources:read`, `ask`, `gems:read`, `gems:generate`, `dashboards:read`, `predict`.
 
-Job cancellation, file upload, adding sources and webhooks are available over REST only. See `../examples/curl/README.md`.
+These are REST only: cancelling jobs, creating, testing, activating and deleting sources, uploading and deleting files, resolving duplicate files, changing roles, removing members, revoking invitations, voice questions (`/ask/audio`) and webhooks. See `../examples/curl/README.md`.
+
+Admin tools such as `invite_member` change real access. Clients that auto-approve tool calls should keep them on manual approval.
 
 ## Troubleshooting
 

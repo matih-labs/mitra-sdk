@@ -28,11 +28,50 @@ curl -s -X PUT -H "$AUTH" -H 'Content-Type: application/json' \
 curl -s -H "$AUTH" -H "X-Matih-Workspace: WORKSPACE_ID" $BASE/sources
 ```
 
+## Members and invitations
+
+Admin actions. Run the write commands only when you mean to.
+
+```bash
+# List members (members:read)
+curl -s -H "$AUTH" $BASE/members
+
+# Invite by email or by phone (members:manage, admin role)
+curl -s -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"email": "teammate@example.com", "role": "ROLE"}' $BASE/invitations
+curl -s -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"phone": "+910000000000", "role": "ROLE"}' $BASE/invitations
+
+# List pending invitations (members:read)
+curl -s -H "$AUTH" $BASE/invitations
+
+# Revoke an invitation (members:manage)
+curl -s -X DELETE -H "$AUTH" $BASE/invitations/INVITATION_ID
+
+# Change a member's role (members:manage)
+curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"role": "ROLE"}' $BASE/members/MEMBER_ID
+
+# Remove a member (members:manage)
+curl -s -X DELETE -H "$AUTH" $BASE/members/MEMBER_ID
+```
+
+Take valid role values from `GET /members`. A 402 with category `member_cap` means the workspace has no seats left.
+
 ## Sources and connectors
 
 ```bash
 # List sources
 curl -s -H "$AUTH" $BASE/sources
+
+# One source, including readiness (sources:read)
+curl -s -H "$AUTH" $BASE/sources/SOURCE_ID
+
+# Activate a source (sources:write)
+curl -s -X POST -H "$AUTH" $BASE/sources/SOURCE_ID/activate
+
+# Delete a source (sources:write). Destructive.
+curl -s -X DELETE -H "$AUTH" $BASE/sources/SOURCE_ID
 
 # List connector types and the fields each needs
 curl -s -H "$AUTH" $BASE/connectors
@@ -42,8 +81,9 @@ curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"config": {"type": "postgres", "host": "db.example.com", "port": 5432, "database": "sales", "user": "reader", "password": "REDACTED"}}' \
   $BASE/sources/test
 
-# Add a source (admin role and sources:write); activate it right away
-curl -s -H "$AUTH" -H 'Content-Type: application/json' \
+# Add a source (admin role and sources:write); activate it right away.
+# 201 on success. 422 with the test result if the connection test fails (nothing is created).
+curl -s -i -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"config": {"type": "postgres", "host": "db.example.com", "port": 5432, "database": "sales", "user": "reader", "password": "REDACTED"}, "activate": true}' \
   $BASE/sources
 ```
@@ -53,12 +93,22 @@ The config above is illustrative. Use the exact `type` and field names returned 
 ## Files (CSV and Excel upload)
 
 ```bash
-# Upload
+# Upload (sources:write). Optional form field on_duplicate: see /openapi.json for allowed values.
 curl -s -H "$AUTH" -F file=@sales.csv $BASE/files
-# -> {"id": "file_...", "status": "processing"}
+# -> {"id": "file_...", "status": "processing", ...}
 
-# Check status until it is ready
+# List files (sources:read)
+curl -s -H "$AUTH" $BASE/files
+
+# One file: status, analysis state, decision_required
 curl -s -H "$AUTH" $BASE/files/FILE_ID
+
+# If decision_required is true, send the user's choice (sources:write)
+curl -s -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"decision": "DECISION"}' $BASE/files/FILE_ID/duplicate
+
+# Delete a file (sources:write). Destructive.
+curl -s -X DELETE -H "$AUTH" $BASE/files/FILE_ID
 
 # Poll in a loop
 until [ "$(curl -s -H "$AUTH" $BASE/files/FILE_ID | jq -r .status)" != "processing" ]; do sleep 3; done
@@ -118,10 +168,15 @@ curl -s -H "$AUTH" -H "Idempotency-Key: $(uuidgen)" \
   -F file=@question.ogg \
   -F source_id=SOURCE_ID \
   -F conversation_id=CONVERSATION_ID \
+  -F language=hi-IN \
   $BASE/ask/audio
 ```
 
-`source_id` and `conversation_id` are optional. The speech language is detected automatically.
+`source_id`, `conversation_id` and `language` are optional (scope `ask`). The speech language is detected automatically. The response is an Answer plus `heard`, for example `{"transcript": "...", "language": "hi-IN"}`:
+
+```bash
+curl -s -H "$AUTH" -F file=@question.ogg $BASE/ask/audio | jq '{heard, status, answer}'
+```
 
 ### Conversations
 
@@ -232,7 +287,7 @@ If it has expired, fetch the gem or job again for a new URL, or use the authenti
 Events: `gems.ready`, `prediction.completed`, `job.completed`, `dashboard_image.ready`. Needs `webhooks:manage`.
 
 ```bash
-# Create. The signing secret is returned ONCE; store it now.
+# Create. The signing secret (whsec_...) is returned ONCE; store it now.
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com/hooks/matih", "events": ["job.completed", "prediction.completed"]}' \
   $BASE/webhooks
@@ -240,17 +295,27 @@ curl -s -H "$AUTH" -H 'Content-Type: application/json' \
 # List
 curl -s -H "$AUTH" $BASE/webhooks
 
+# Send a test delivery
+curl -s -X POST -H "$AUTH" $BASE/webhooks/WEBHOOK_ID/test
+
+# Recent deliveries and their outcomes
+curl -s -H "$AUTH" $BASE/webhooks/WEBHOOK_ID/deliveries
+
 # Delete
 curl -s -X DELETE -H "$AUTH" $BASE/webhooks/WEBHOOK_ID
 ```
 
 ### Verify a signature
 
-Each delivery has a header:
+Each delivery carries three headers:
 
 ```
 Matih-Signature: t=<unix timestamp>,v1=<hex hmac-sha256>
+Matih-Event: <event name, for example job.completed>
+Matih-Delivery: <delivery id>
 ```
+
+Use `Matih-Delivery` to deduplicate repeated deliveries.
 
 The signed string is `"<t>.<raw body>"`, HMAC-SHA256 with your webhook secret.
 

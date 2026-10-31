@@ -77,8 +77,9 @@ The query ran and matched nothing. Say that. Suggest checking the time range, fi
 - `file`: the audio (required)
 - `conversation_id`: optional
 - `source_id`: optional
+- `language`: optional BCP-47 code to force the response language (scope `ask`)
 
-Speech is transcribed, language-detected and answered like text. The Answer shape is the same. Use this when the user attaches or records a voice message. Do not transcribe yourself first.
+Speech is transcribed, language-detected and answered like text. The Answer shape is the same, plus `heard`: `{"transcript": "...", "language": "hi-IN"}`. Show the user the transcript so they can catch a mis-hearing, and if it is wrong, ask them to repeat or type the question. Use this when the user attaches or records a voice message. Do not transcribe yourself first.
 
 ```bash
 curl -s -H "Authorization: Bearer $MATIH_API_KEY" -H "Idempotency-Key: $(uuidgen)" \

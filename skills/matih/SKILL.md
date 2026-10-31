@@ -1,6 +1,6 @@
 ---
 name: matih
-description: Use for questions about the user's business data in Matih (Mitra), including ad-hoc data questions in plain English or any of 22 Indian languages, Gems (automatic insight cards), saved dashboards rendered as images, forecasts and what-if predictions, listing data sources, and switching between Matih workspaces. Works through the Matih MCP tools (list_workspaces, use_workspace, list_sources, ask, list_gems, get_gem, generate_gems, dashboard_image, list_dashboards, predict, get_job) or the REST API at https://workspace.matih.ai/api/v1. Trigger on "ask Matih", "Matih gems", "show my dashboard as an image", "forecast", "switch workspace", or any request to query a connected Matih data source.
+description: Use for questions about the user's business data in Matih (Mitra), including ad-hoc data questions in plain English or any of 22 Indian languages, Gems (automatic insight cards), saved dashboards rendered as images, forecasts and what-if predictions, listing data sources and uploaded files, checking source readiness, switching between Matih workspaces, and (only when explicitly asked) managing members, invitations, sources and files. Works through the Matih MCP tools (list_workspaces, use_workspace, list_members, invite_member, list_sources, source_status, list_gems, get_gem, generate_gems, ask, list_dashboards, dashboard_image, predict, get_job, list_files) or the REST API at https://workspace.matih.ai/api/v1. Trigger on "ask Matih", "Matih gems", "show my dashboard as an image", "forecast", "switch workspace", "invite a teammate to Matih", "is my source ready", or any request to query a connected Matih data source.
 ---
 
 # Matih
@@ -16,11 +16,12 @@ OpenAPI 3.1 spec: `GET /openapi.json`, docs at `/docs`.
 - If Matih MCP tools are available in this session (names like `ask`, `list_sources`), use them. Images come back as MCP image content.
 - Otherwise use REST with `curl` or any HTTP client. Auth is `Authorization: Bearer $MATIH_API_KEY`. See `references/auth.md`.
 - Never invent endpoints or tool names. The tool list and endpoint list in this skill is complete.
+- The MCP tools are: `list_workspaces`, `use_workspace`, `list_members`, `invite_member`, `list_sources`, `source_status`, `list_gems`, `get_gem`, `generate_gems`, `ask`, `list_dashboards`, `dashboard_image`, `predict`, `get_job`, `list_files`. Everything else (cancelling jobs, creating or deleting sources, uploading files, role changes, webhooks) is REST only.
 
 ## The default flow
 
 1. Workspace. Call `list_workspaces` (REST: `GET /workspaces`). The result has `current` and a list of `{id, name, role, kind}`. If the user named a different workspace, call `use_workspace` (REST: `PUT /me/workspace {"workspace_id": ...}`, or send `X-Matih-Workspace` per request). API keys are pinned to one workspace and cannot switch. See `references/workspaces.md`.
-2. Source. Call `list_sources` (REST: `GET /sources`). Pick the source whose `name` or `type` matches the question and whose `status` is healthy. If exactly one source is active you can omit `source_id`. If several fit and the user did not say, ask the user which one.
+2. Source. Call `list_sources` (REST: `GET /sources`). Pick the source whose `name` or `type` matches the question and whose `status` is healthy. If unsure it is ready to query, call `source_status` (REST: `GET /sources/{id}`, includes readiness). If exactly one source is active you can omit `source_id`. If several fit and the user did not say, ask the user which one.
 3. Ask. Call `ask` with the question (REST: `POST /ask`). Read `status` first, not `answer`. See `references/asking.md`.
 4. Present. Give the user the `answer` text, then the key figures from `result.rows`. Mention the `sql` only if they ask how it was computed or you need to explain a discrepancy.
 5. Follow up. Reuse `conversation_id` for any question that builds on the previous one. Offer one or two `follow_ups` if useful.
@@ -46,8 +47,9 @@ Write questions in the user's language. 22 Indian languages are auto-detected, a
 - Dashboards as images: `list_dashboards`, then `dashboard_image`. Asynchronous when not cached. See `references/dashboards.md`.
 - Predictions (forecasts, what-if, models): `predict`. Always asynchronous, up to 30 minutes. See `references/predictions.md`.
 - Jobs: `get_job` (REST `GET /jobs/{id}`), cancel with `POST /jobs/{id}/cancel`.
-- Adding data (REST only): `POST /files` for CSV/Excel upload, `POST /sources/test` and `POST /sources` for connectors (needs admin role and `sources:write`). `GET /connectors` lists types and fields.
-- Webhooks (REST only): `GET/POST/DELETE /webhooks`. Needs `webhooks:manage`. Events: `gems.ready`, `prediction.completed`, `job.completed`, `dashboard_image.ready`.
+- Sources and files: `list_sources`, `source_status`, `list_files` over MCP. Connecting, activating and deleting sources, and uploading files, are REST only. See `references/sources.md`.
+- Members and invitations: `list_members`, `invite_member` over MCP; role changes, removals and revoking invitations are REST only. See `references/members.md`.
+- Webhooks (REST only): `GET/POST/DELETE /webhooks`, `POST /webhooks/{id}/test`, `GET /webhooks/{id}/deliveries`. Needs `webhooks:manage`. Events: `gems.ready`, `prediction.completed`, `job.completed`, `dashboard_image.ready`.
 
 ## Rules for agents
 
@@ -58,7 +60,10 @@ Write questions in the user's language. 22 Indian languages are auto-detected, a
 - `image_url` values are short-lived signed URLs (15 minutes) and need no auth. Fetch or display them promptly. If expired, re-request.
 - Do not poll jobs tighter than the cadence in `references/predictions.md`.
 - Never print the API key, signing secrets or OAuth tokens back to the user or into logs.
-- Do not take destructive or costly actions (generating gems, predictions, adding sources) unless the user asked or clearly implied it.
+- Do not take costly actions (generating gems, predictions) unless the user asked or clearly implied it.
+- Admin actions (inviting people, changing roles, removing members, revoking invitations, connecting or deleting sources, deleting files) only when the user explicitly asks for that exact action. Never infer one from a vague request.
+- Confirm before anything destructive or hard to undo: state what will be removed (member, source, file, invitation, webhook) and by whom it was requested, and wait for a yes. Deleting a source or removing a member is not undone by re-adding it.
+- Never put database passwords or connector secrets in chat output or logs; ask the user to supply them and do not echo them back.
 
 ## Quick REST reference
 
@@ -82,4 +87,6 @@ More recipes: `examples/curl/README.md` in this repository.
 - `references/gems.md`: Gems listing, generation, images.
 - `references/dashboards.md`: dashboards and image rendering.
 - `references/predictions.md`: jobs, polling, cancel, result shapes.
+- `references/members.md`: members, roles, invitations.
+- `references/sources.md`: connectors, sources, readiness, file uploads and duplicates.
 - `references/errors.md`: every error category and the right response.

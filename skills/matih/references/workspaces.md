@@ -36,6 +36,10 @@ After switching, call `list_sources` again. Source ids differ per workspace and 
 
 An API key is pinned to the workspace it was created in. A different `X-Matih-Workspace` header is refused, and `use_workspace` cannot move it. To work in another workspace the user must create a key there, or connect through OAuth.
 
+## Members
+
+Who is in the workspace and what role each has is covered in `members.md` (`list_members`, `GET /members`, needs `members:read`). Check your own `role` here first: many admin actions need the admin role.
+
 ## Guidance
 
 - When the user says "in the Sales workspace", match by `name` case-insensitively. If more than one matches, ask.
