@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from store import Store  # noqa: E402
+from store import Store
 
 
 def test_workspace_mapping_roundtrip(tmp_path):

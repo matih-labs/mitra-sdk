@@ -3,9 +3,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from mitra import Answer, Dashboard, MitraError, RateLimitError  # noqa: E402
+from mitra import Answer, Dashboard, MitraError, RateLimitError
 
-import formatting as f  # noqa: E402
+import formatting as f
 
 
 def test_parse_command():
