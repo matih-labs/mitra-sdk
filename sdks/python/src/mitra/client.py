@@ -7,7 +7,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any, BinaryIO
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import httpx
 
@@ -21,6 +21,9 @@ from .models import (
     Dashboard,
     DashboardList,
     DuplicateChoice,
+    Embed,
+    EmbedList,
+    EmbedResource,
     File,
     FileList,
     GemList,
@@ -482,6 +485,70 @@ class _Webhooks(_Resources):
         )
 
 
+def _embed_body(
+    resource: EmbedResource | dict[str, Any],
+    origins: list[str] | tuple[str, ...],
+    filters: dict[str, Any] | None,
+    ttl_seconds: int | None,
+) -> dict[str, Any]:
+    if isinstance(resource, EmbedResource):
+        res = {"type": resource.type, "id": resource.id}
+    elif isinstance(resource, dict) and isinstance(resource.get("type"), str) and isinstance(
+        resource.get("id"), str
+    ):
+        res = {"type": resource["type"], "id": resource["id"]}
+    else:
+        raise ValueError('resource must be {"type": "dashboard" | "gems", "id": "..."}')
+    if isinstance(origins, str) or not origins:
+        raise ValueError("origins must be a non-empty list of exact origins, e.g. ['https://app.example.com']")
+    body: dict[str, Any] = {"resource": res, "origins": list(origins)}
+    if filters is not None:
+        body["filters"] = filters
+    if ttl_seconds is not None:
+        body["ttl_seconds"] = ttl_seconds
+    return body
+
+
+class _Embeds(_Resources):
+    """Embed dashboards and Gems in your own product. Needs ``embeds:create`` (create, revoke)
+    or ``embeds:read`` (list). Pair with the ``<matih-embed>`` element (``@matihlabs/embed``)."""
+
+    def create(
+        self,
+        *,
+        resource: EmbedResource | dict[str, Any],
+        origins: list[str] | tuple[str, ...],
+        filters: dict[str, Any] | None = None,
+        ttl_seconds: int | None = None,
+        **opts: _Opts,
+    ) -> Any:
+        """Mint a short-lived embed token (``POST /embeds``; free; each call mints a new one).
+
+        ``resource`` is ``{"type": "dashboard", "id": "d_123"}`` or, for Gems,
+        ``{"type": "gems", "id": "<source id>"}``. ``origins`` are the 1 to 10 exact origins
+        (``https://app.example.com``; https only, except ``http://localhost[:port]`` and
+        ``http://127.0.0.1[:port]``) allowed to frame the page. ``filters`` are the viewer's row
+        filters, exactly the parameters the dashboard declares; Gems take none.
+        ``ttl_seconds`` is 60 to 900 (default 300). A token is never renewed: mint again.
+
+        Returns an :class:`Embed`. Raises ``EmbedRefusedError`` (422, read ``code``),
+        ``EmbedNotFoundError`` (404) or ``PermissionDeniedError`` (403). Call this from your
+        backend, never from the browser: the API key must stay secret."""
+        return self._c.request(
+            "POST", "/embeds", json_body=_embed_body(resource, origins, filters, ttl_seconds),
+            parse=Embed.model_validate, **opts,
+        )
+
+    def list(self, **opts: _Opts) -> Any:
+        """Tokens minted by this key: id, resource, origins, created, expires, revoked. Never the
+        secret or the filter values."""
+        return self._c.request("GET", "/embeds", parse=EmbedList.model_validate, **opts)
+
+    def revoke(self, embed_id: str, **opts: _Opts) -> Any:
+        """Revoke one token of this key by its ``emt_...`` id (HTTP 204, idempotent). Returns None."""
+        return self._c.request("DELETE", f"/embeds/{quote(embed_id, safe='')}", **opts)
+
+
 class _Conversations(_Resources):
     def list(self, **opts: _Opts) -> Any:
         return self._c.request(
@@ -779,6 +846,7 @@ class Mitra:
         self.conversations = _Conversations(core)
         self.members = _Members(core)
         self.invitations = _Invitations(core)
+        self.embeds = _Embeds(core)
         core.jobs = self.jobs  # type: ignore[attr-defined]
         self.settings = settings
 
@@ -1112,6 +1180,7 @@ class AsyncMitra:
         self.conversations = _Conversations(core)
         self.members = _Members(core)
         self.invitations = _Invitations(core)
+        self.embeds = _Embeds(core)
         core.jobs = self.jobs  # type: ignore[attr-defined]
         self.settings = settings
 

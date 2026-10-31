@@ -123,6 +123,35 @@ client.invitations.list(); client.invitations.revoke("inv_1")
 client.members.update("mem_1", "admin"); client.members.remove("mem_1")
 ```
 
+## Embeds
+
+Show a dashboard (with per-viewer row filters) or a Gems feed inside your own product. Needs
+`embeds:create` (mint, revoke) or `embeds:read` (list). Call it from your backend: the API key
+never goes to the browser. The browser gets only the short-lived token, through the
+`<matih-embed>` element (`@matihlabs/embed`, see `sdks/embed/`).
+
+```python
+embed = client.embeds.create(
+    resource={"type": "dashboard", "id": "d_123"},   # or {"type": "gems", "id": "<source id>"}
+    filters={"customer_id": "C123"},                  # exactly the dashboard's embed parameters; none for Gems
+    origins=["https://app.customer.com"],             # 1 to 10 exact origins that may frame the page
+    ttl_seconds=300,                                  # 60 to 900, default 300; never renewed, mint again
+)
+embed.src     # the iframe URL without the token (keeps ?e=emt_...)
+embed.token   # met_..., a secret; left out of repr
+embed.id      # emt_..., not secret: pass it to revoke
+
+client.embeds.list()            # tokens minted by this key (never the secret or filter values)
+client.embeds.revoke(embed.id)  # 204, idempotent, returns None
+```
+
+Minting is not idempotent (every call mints) and is never retried after a 5xx. A refusal raises
+`EmbedRefusedError` (422) with `.code` one of `missing_parameter`, `unknown_parameter`,
+`invalid_value`, `invalid_origin`, `filters_not_supported` (Gems cannot be filtered),
+`no_embed_parameters`; an unknown or unreadable dashboard or source raises `EmbedNotFoundError`
+(404); a role that no longer allows it is a `PermissionDeniedError` (403). `AsyncMitra` is the
+same with `await`.
+
 ## Webhooks
 
 ```python
@@ -194,7 +223,7 @@ asyncio.run(main())
 All API errors derive from `MitraError` with `.status`, `.category`, `.code`, `.request_id` and
 `.body`. Subclasses: `AuthError` (401), `PermissionDeniedError` (403: `scope`, `workspace_role`,
 `source_access`), `CreditsError` (402: `not_ready`, `member_cap`), `BusyError` (409, a conflict with the current state),
-`RateLimitError` (429, `.retry_after`), `SourceTestFailedError` (422 from `sources.create`, `.test_result`), plus `JobFailedError`, `JobTimeoutError`. 429 is retried
+`RateLimitError` (429, `.retry_after`), `EmbedRefusedError` (422 from `embeds.create`, read `.code`), `EmbedNotFoundError` (404 from `embeds.create` and `embeds.revoke`), `SourceTestFailedError` (422 from `sources.create`, `.test_result`), plus `JobFailedError`, `JobTimeoutError`. 429 is retried
 automatically (honouring `Retry-After`) up to `max_retries` (default 2), as are 5xx and network
 errors on GETs and on calls with an idempotency key.
 

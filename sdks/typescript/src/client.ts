@@ -1,5 +1,12 @@
 import createClient from "openapi-fetch";
-import { MitraError, JobFailedError, JobTimeoutError, errorFromResponse, sourceErrorFromResponse } from "./errors.js";
+import {
+  MitraError,
+  JobFailedError,
+  JobTimeoutError,
+  embedErrorFromResponse,
+  errorFromResponse,
+  sourceErrorFromResponse,
+} from "./errors.js";
 import { HttpClient, sleep, type SendOptions } from "./http.js";
 import { parseSSE } from "./sse.js";
 import { isTerminalJob } from "./types.js";
@@ -11,6 +18,7 @@ import type {
   Conversation,
   ConversationList,
   ConnectorList,
+  CreateEmbedParams,
   CreateInvitationParams,
   CreateSourceParams,
   CreateWebhookParams,
@@ -18,6 +26,8 @@ import type {
   DashboardImageResult,
   DashboardList,
   DuplicateDecision,
+  Embed,
+  EmbedList,
   Gem,
   GemList,
   GemsResult,
@@ -719,6 +729,60 @@ class WebhooksApi {
   }
 }
 
+class EmbedsApi {
+  constructor(private readonly http: HttpClient) {}
+
+  /**
+   * Mint a short-lived embed token (`POST /embeds`; free; every call mints a new one, so it is
+   * never retried after a 5xx). Needs `embeds:create`. Call it from your backend: the API key
+   * must never reach the browser. Pass `embedSrc(embed)` and `embed.token` to `<matih-embed>`.
+   *
+   * Throws EmbedRefusedError (422, read `code`), EmbedNotFoundError (404) or PermissionError (403).
+   */
+  create(params: CreateEmbedParams, opts?: RequestOptions): Promise<Embed> {
+    const r = params.resource as { type?: unknown; id?: unknown } | undefined;
+    if (!r || typeof r.type !== "string" || typeof r.id !== "string") {
+      return Promise.reject(new TypeError('embeds.create: resource must be { type: "dashboard" | "gems", id }'));
+    }
+    if (!Array.isArray(params.origins) || params.origins.length === 0) {
+      return Promise.reject(new TypeError("embeds.create: origins must be a non-empty array of exact origins"));
+    }
+    const body: Record<string, unknown> = {
+      resource: { type: r.type, id: r.id },
+      origins: [...params.origins],
+    };
+    if (params.filters !== undefined) body["filters"] = params.filters;
+    if (params.ttlSeconds !== undefined) body["ttl_seconds"] = params.ttlSeconds;
+    return this.http.json<Embed>({
+      method: "POST",
+      path: "/embeds",
+      json: body,
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+
+  /** Tokens minted by this key (`embeds:read`): never the secret or the filter values. */
+  list(opts?: RequestOptions): Promise<EmbedList> {
+    return this.http.json<EmbedList>({
+      method: "GET",
+      path: "/embeds",
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+
+  /** Revoke one token of this key by its `emt_...` id (HTTP 204, idempotent). Needs `embeds:create`. */
+  async revoke(id: string, opts?: RequestOptions): Promise<void> {
+    await this.http.send({
+      method: "DELETE",
+      path: `/embeds/${enc(id)}`,
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+}
+
 class ConversationsApi {
   constructor(private readonly http: HttpClient) {}
 
@@ -744,6 +808,7 @@ export class Mitra {
   readonly conversations: ConversationsApi;
   readonly members: MembersApi;
   readonly invitations: InvitationsApi;
+  readonly embeds: EmbedsApi;
   /**
    * An openapi-fetch client with loose typing for endpoints without a
    * dedicated method. It shares this client's headers, retries and timeouts.
@@ -792,6 +857,7 @@ export class Mitra {
     this.conversations = new ConversationsApi(this.http);
     this.members = new MembersApi(this.http);
     this.invitations = new InvitationsApi(this.http);
+    this.embeds = new EmbedsApi(this.http);
 
     const http = this.http;
     this.raw = createClient<any>({

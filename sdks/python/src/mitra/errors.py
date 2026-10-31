@@ -100,6 +100,38 @@ class SourceTestFailedError(MitraError):
         self.test_result = test_result
 
 
+EMBED_REFUSAL_CODES = (
+    "missing_parameter",
+    "unknown_parameter",
+    "invalid_value",
+    "invalid_origin",
+    "filters_not_supported",
+    "no_embed_parameters",
+)
+
+
+class EmbedRefusedError(MitraError):
+    """422 from ``embeds.create``: the server refused the request and nothing was minted.
+
+    ``code`` says why (``EMBED_REFUSAL_CODES``):
+
+    - ``missing_parameter``: ``filters`` lacks a parameter the dashboard declares
+    - ``unknown_parameter``: ``filters`` has a name the dashboard does not declare
+    - ``invalid_value``: a filter value is not a valid value for its declared type
+    - ``invalid_origin``: an origin is not an exact ``scheme://host[:port]`` (https only,
+      except ``http://localhost`` and ``http://127.0.0.1``; no paths, wildcards or ``null``)
+    - ``filters_not_supported``: filters sent for a Gems embed (Gems cannot be filtered)
+    - ``no_embed_parameters``: filters sent for a dashboard that declares no embed parameters
+
+    Other 422 codes the server may add are passed through in ``code`` unchanged.
+    """
+
+
+class EmbedNotFoundError(MitraError):
+    """404 from ``embeds.create`` or ``embeds.revoke``: the dashboard or source does not exist
+    or the key's member cannot read it, or (revoke) the token id is not one of this key's."""
+
+
 class WebhookVerificationError(ValueError):
     """The ``Matih-Signature`` header is missing, malformed, stale or does not match."""
 
@@ -110,6 +142,30 @@ _STATUS_CLASSES: dict[int, type[MitraError]] = {
     403: PermissionDeniedError,
     409: BusyError,
 }
+
+
+def _is_embeds_path(path: str | None) -> bool:
+    """True for ``.../embeds`` and ``.../embeds/{id}``."""
+    if not path:
+        return False
+    # ``path`` is the decoded request path, so an id holding a "/" adds segments: look for the
+    # resource segment anywhere rather than at a fixed offset.
+    return "embeds" in path.strip("/").split("/")
+
+
+def _validation_message(detail: Any) -> str | None:
+    """Flatten a FastAPI validation list (``detail`` is a list of ``{loc, msg}``)."""
+    if not isinstance(detail, list) or not detail:
+        return None
+    parts = []
+    for item in detail:
+        if not isinstance(item, dict):
+            parts.append(str(item))
+            continue
+        loc = ".".join(str(p) for p in item.get("loc", []) if p != "body")
+        msg = str(item.get("msg") or "invalid")
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    return "; ".join(parts)
 
 
 def error_from_response(
@@ -148,6 +204,17 @@ def error_from_response(
     ):
         test_result = detail.get("test") if isinstance(detail, dict) else None
         return SourceTestFailedError(message, test_result=test_result, **kwargs)
+    if _is_embeds_path(path):
+        if status == 422:
+            # The code lives in the envelope's ``detail.code``; a top-level ``code`` is accepted too.
+            if kwargs["code"] is None and isinstance(body, dict) and isinstance(body.get("code"), str):
+                kwargs["code"] = body["code"]
+            if kwargs["category"] is None:
+                kwargs["category"] = "validation"
+            flat = _validation_message(detail)
+            return EmbedRefusedError(flat or message, **kwargs)
+        if status == 404:
+            return EmbedNotFoundError(message, **kwargs)
     if status == 429:
         return RateLimitError(message, retry_after=retry_after, **kwargs)
     return _STATUS_CLASSES.get(status, MitraError)(message, **kwargs)

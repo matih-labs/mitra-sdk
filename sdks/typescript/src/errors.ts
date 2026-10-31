@@ -89,6 +89,41 @@ export class SourceTestFailedError extends MitraError {
   }
 }
 
+/** The 422 codes `embeds.create` can answer with. The server may add more; they pass through in `code`. */
+export const EMBED_REFUSAL_CODES = [
+  "missing_parameter",
+  "unknown_parameter",
+  "invalid_value",
+  "invalid_origin",
+  "filters_not_supported",
+  "no_embed_parameters",
+] as const;
+
+/**
+ * 422 from `embeds.create`: nothing was minted. `code` says why: `missing_parameter` (filters
+ * lack a declared parameter), `unknown_parameter`, `invalid_value` (a filter value is not valid
+ * for its type), `invalid_origin`, `filters_not_supported` (filters sent for Gems),
+ * `no_embed_parameters` (filters sent for a dashboard that declares none). `code` is undefined
+ * for a plain request-validation 422.
+ */
+export class EmbedRefusedError extends MitraError {
+  constructor(message: string, init: MitraErrorInit) {
+    super(message, init);
+    this.name = "EmbedRefusedError";
+  }
+}
+
+/**
+ * 404 from `embeds.create` or `embeds.revoke`: the dashboard or source does not exist or the
+ * key's member cannot read it, or (revoke) the token id is not one of this key's.
+ */
+export class EmbedNotFoundError extends MitraError {
+  constructor(message: string, init: MitraErrorInit) {
+    super(message, init);
+    this.name = "EmbedNotFoundError";
+  }
+}
+
 /** Network failure or timeout before a response arrived (status 0). */
 export class ConnectionError extends MitraError {
   constructor(message: string, init: { category: "network" | "timeout"; cause?: unknown }) {
@@ -263,4 +298,27 @@ export function sourceErrorFromResponse(status: number, headers: Headers, text: 
       testResult: detail["test"],
     },
   );
+}
+
+/**
+ * Error mapper for the `/embeds` routes: 422 becomes EmbedRefusedError (read `code`) and 404
+ * EmbedNotFoundError. Anything else keeps the default mapping (401, 403, 429, ...).
+ */
+export function embedErrorFromResponse(status: number, headers: Headers, text: string): MitraError | undefined {
+  if (status !== 422 && status !== 404) return undefined;
+  const base = errorFromResponse(status, headers, text);
+  let code = base.code;
+  // The code is in the envelope's `detail.code`; a top-level `code` is accepted too.
+  if (code === undefined && isRecord(base.body)) {
+    const top = base.body["code"];
+    if (typeof top === "string") code = top;
+  }
+  const init: MitraErrorInit = {
+    status,
+    category: base.category,
+    code,
+    requestId: base.requestId,
+    body: base.body,
+  };
+  return status === 422 ? new EmbedRefusedError(base.message, init) : new EmbedNotFoundError(base.message, init);
 }

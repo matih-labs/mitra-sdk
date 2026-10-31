@@ -9,6 +9,9 @@ export {
   BusyError,
   ConnectionError,
   SourceTestFailedError,
+  EmbedRefusedError,
+  EmbedNotFoundError,
+  EMBED_REFUSAL_CODES,
   JobFailedError,
   JobTimeoutError,
 } from "./errors.js";

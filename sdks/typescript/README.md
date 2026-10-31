@@ -33,7 +33,7 @@ If you pass nothing, the client reads `MATIH_API_KEY` or `MATIH_ACCESS_TOKEN` fr
 
 Create keys under `Settings › API & MCP`; choose the products the key may use (all on by default) and revoke keys in the same screen. Keys never expire by default. Use an API key here, not an MCP connector key, which works only on `/api/v1/mcp`.
 
-Scopes: `workspaces:read`, `sources:read`, `sources:write`, `files:read`, `files:write`, `gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`, `members:read`, `members:manage`.
+Scopes: `workspaces:read`, `sources:read`, `sources:write`, `files:read`, `files:write`, `gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`, `members:read`, `members:manage`, `embeds:create`, `embeds:read`.
 
 Client options:
 
@@ -181,6 +181,29 @@ const { invitations } = await mitra.invitations.list();
 await mitra.invitations.revoke(invitations[0].id);
 ```
 
+## Embeds
+
+Show a dashboard (with per-viewer row filters) or a Gems feed inside your own product. Needs `embeds:create` (mint, revoke) or `embeds:read` (list). Mint from your backend: the API key never goes to the browser, only the short-lived token does, through the `<matih-embed>` element (`@matihlabs/embed`, see `sdks/embed/`).
+
+```ts
+import { Mitra, embedSrc } from "@matihlabs/mitra";
+
+const embed = await mitra.embeds.create({
+  resource: { type: "dashboard", id: "d_123" }, // or { type: "gems", id: "<source id>" }
+  filters: { customer_id: "C123" },              // exactly the dashboard's embed parameters; none for Gems
+  origins: ["https://app.customer.com"],         // 1 to 10 exact origins that may frame the page
+  ttlSeconds: 300,                               // 60 to 900, default 300; never renewed, mint again
+});
+embedSrc(embed);   // the iframe URL without the token (keeps ?e=emt_...)
+embed.token;       // met_..., a secret: do not log `embed`
+embed.id;          // emt_..., not secret: pass it to revoke
+
+await mitra.embeds.list();          // tokens minted by this key (never the secret or filter values)
+await mitra.embeds.revoke(embed.id); // 204, idempotent
+```
+
+Minting is not idempotent (every call mints) and is never retried after a 5xx. A refusal throws `EmbedRefusedError` (422) with `code` one of `missing_parameter`, `unknown_parameter`, `invalid_value`, `invalid_origin`, `filters_not_supported` (Gems cannot be filtered), `no_embed_parameters`; an unknown or unreadable dashboard or source throws `EmbedNotFoundError` (404); a role that no longer allows it is a `PermissionError` (403).
+
 ## Webhooks
 
 ```ts
@@ -235,6 +258,8 @@ Every API failure is a `MitraError` with `status`, `category`, `code`, `message`
 | `PermissionError` | 403 (`scope`, `workspace_role`, `source_access`) |
 | `BusyError` | 409, a conflict with the current state (category `conflict`) |
 | `RateLimitError` | 429, with `retryAfter` in seconds |
+| `EmbedRefusedError` | 422 from `embeds.create`, read `code` |
+| `EmbedNotFoundError` | 404 from `embeds.create` and `embeds.revoke` |
 | `SourceTestFailedError` | 422 from `sources.create`, with `testResult` |
 | `JobFailedError` | a job failed or was cancelled, with `job` |
 | `JobTimeoutError` | `jobs.wait` ran out of time |
