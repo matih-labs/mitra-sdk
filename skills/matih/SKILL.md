@@ -65,6 +65,15 @@ Write questions in the user's language. 22 Indian languages are auto-detected, a
 - Confirm before anything destructive or hard to undo: state what will be removed (member, source, file, invitation, webhook) and by whom it was requested, and wait for a yes. Deleting a source or removing a member is not undone by re-adding it.
 - Never put database passwords or connector secrets in chat output or logs; ask the user to supply them and do not echo them back.
 
+## Waiting or not
+
+Long work (Gems, predictions, dashboard images, source connect, file processing) can be waited
+for or backgrounded. Send `Prefer: wait=N` (N up to 60, 120 for `POST /sources`) to block on the
+server; you get 200/201 if it finished, else 202 with a Job to poll at `GET /jobs/{id}`. Send
+`Prefer: respond-async` on `POST /ask` to get a Job of kind `ask` whose `result` is the Answer.
+In the SDKs: `wait=` (seconds) or `background=True` (TypeScript `{ wait }`, `{ background: true }`),
+then `jobs.wait(job, timeout)`.
+
 ## Quick REST reference
 
 ```bash

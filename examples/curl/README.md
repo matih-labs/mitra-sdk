@@ -234,6 +234,27 @@ curl -s -H "$AUTH" -H 'Content-Type: application/json' \
 
 The result is `{answer, attachments:[{type: forecast|table|model|what_if, ...}], image_url?}`.
 
+## Sync or background (Prefer)
+
+Long calls take standard `Prefer` headers. `Preference-Applied` in the response says what the
+server honoured.
+
+```bash
+# Wait up to 60 s for a forecast: 201/200 if finished in time, otherwise 202 with a Job
+curl -si https://workspace.matih.ai/api/v1/predictions \
+  -H "Authorization: Bearer $MATIH_API_KEY" -H "Content-Type: application/json" \
+  -H "Prefer: wait=60" -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"question": "Forecast next quarter revenue"}'
+
+# Ask in the background: 202 with a Job of kind "ask"; poll it, result is the Answer
+curl -s https://workspace.matih.ai/api/v1/ask \
+  -H "Authorization: Bearer $MATIH_API_KEY" -H "Content-Type: application/json" \
+  -H "Prefer: respond-async" -d '{"question": "Top customers this year"}'
+```
+
+`wait` also works as `?wait=N` on `POST /gems/generate`, `/predictions`,
+`/dashboards/{id}/image` (up to 60), `POST /sources` (up to 120) and `POST /files`.
+
 ## Jobs
 
 ```bash
