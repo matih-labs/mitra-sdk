@@ -7,12 +7,12 @@
 //   php example.php --skip-predict
 //   php example.php --background          (predict without Prefer: wait, start a job and poll it)
 //   php example.php --upload ./sales.csv
-//   php example.php --invite teammate@example.com --role ROLE   (admin action, never runs by default)
+//   php example.php --invite teammate@example.com --role user   (admin action, never runs by default)
 //
 // Environment:
 //   MATIH_API_KEY       required. Create one under Settings › API & MCP in Matih.
 //   MATIH_BASE_URL      optional. Default https://workspace.matih.ai ("/api/v1" is appended).
-//   MATIH_ON_DUPLICATE  optional. Passed as the on_duplicate form field of the file upload.
+//   MATIH_ON_DUPLICATE  optional. The on_duplicate form field of the file upload: ask (default) or keep_both.
 //
 // Teaching example. Do not commit your API key.
 
@@ -71,8 +71,8 @@ function matih_pretty($value): string
  *
  * $body is a JSON string, or an array for multipart (curl sets the boundary itself).
  * $headers are extra header lines such as "Idempotency-Key: ..." or "Prefer: wait=30".
- * On a 429 it honours Retry-After once and retries with the same headers, so a
- * credit-costing call carrying an Idempotency-Key is never charged twice.
+ * On a 429 it honours Retry-After once and retries with the same headers, including any
+ * Idempotency-Key (the server honours it on /ask and /predictions).
  */
 function matih_send(string $method, string $path, $body = null, array $headers = [], bool $retried = false): array
 {
@@ -179,9 +179,9 @@ const MATIH_WAIT_SECONDS = 30;
 /**
  * Sync with a bounded wait: "Prefer: wait=N" (N up to 60 seconds).
  * Works on POST /gems/generate, /predictions and /dashboards/{id}/image. The server answers
- * 200 or 201 when the work finished within N seconds, otherwise 202 with a Job. Either way this
- * returns the result array; on 202 it falls back to polling the job.
- * If a finished answer carries a Job (it has a "state"), its result field is used.
+ * 200 with the finished Job when the work finished within N seconds, otherwise 202 with the Job
+ * as it stands. Either way this returns the result array; on 202 it falls back to polling the job.
+ * A finished answer is a Job (it has a "state"), and its result field is used.
  */
 function matih_run_with_wait(string $path, ?array $payload, ?string $idempotencyKey, float $first, float $max, float $timeout): array
 {
@@ -273,7 +273,7 @@ function example_list_gems(): void
 // (3) Dashboard image job
 // ---------------------------------------------------------------------------
 // Sync-with-fallback: wait=N, and if the job is still running, poll GET /jobs/{id}
-// with a growing delay. image_url is a signed URL valid for about 15 minutes that
+// with a growing delay. image_url is a public, unguessable URL that expires after 15 minutes and
 // needs no Authorization header.
 function example_dashboard_image(): void
 {
@@ -292,17 +292,13 @@ function example_dashboard_image(): void
 // ---------------------------------------------------------------------------
 // (4) Predict
 // ---------------------------------------------------------------------------
-// A prediction can run for up to 30 minutes. Poll every 5 to 10 seconds.
-// Webhooks (prediction.completed) avoid polling.
+// A prediction usually takes one to five minutes; the server gives up after 30.
+// Poll every 5 to 10 seconds. Webhooks (prediction.completed) avoid polling.
+// A finished prediction's result is {conversation_id, answer}; answer is a string.
 function print_prediction(array $result): void
 {
     echo 'answer: ' . ($result['answer'] ?? '') . "\n";
-    foreach ($result['attachments'] ?? [] as $attachment) {
-        echo '  attachment: ' . ($attachment['type'] ?? '') . "\n";
-    }
-    if (!empty($result['image_url'])) {
-        echo 'image_url: ' . $result['image_url'] . "\n";
-    }
+    echo 'conversation_id: ' . ($result['conversation_id'] ?? '') . " (pass it to POST /predictions to continue)\n";
 }
 
 /** Sync-with-fallback: wait=N, then poll on 202. */
@@ -334,8 +330,8 @@ function example_list_sources(): void
     $data = matih_request('GET', '/sources');
     $sources = $data['sources'] ?? [];
     foreach ($sources as $s) {
-        echo '  ' . ($s['id'] ?? '') . '  ' . ($s['name'] ?? '') . '  type=' . ($s['type'] ?? '')
-            . '  status=' . ($s['status'] ?? '') . '  active=' . (!empty($s['active']) ? 'true' : 'false') . "\n";
+        echo '  ' . ($s['id'] ?? '') . '  ' . ($s['name'] ?? '') . '  connector_type=' . ($s['connector_type'] ?? '')
+            . '  state=' . ($s['state'] ?? '') . '  active=' . (!empty($s['is_active']) ? 'true' : 'false') . "\n";
     }
     if (count($sources) === 0) {
         echo "no sources yet\n";
@@ -368,25 +364,34 @@ function example_upload_file(string $path): void
     if ($onDuplicate !== false && $onDuplicate !== '') {
         $form['on_duplicate'] = $onDuplicate;
     }
-    $file = matih_request('POST', '/files', $form);
-    echo 'uploaded: ' . ($file['id'] ?? '?') . ' status=' . ($file['status'] ?? '?') . "\n";
+    // A file is a File, not a Job. "Prefer: wait=30" (up to 120) holds the request until it
+    // is ready; if processing is still running the answer is 202.
+    $file = matih_request('POST', '/files', $form, ['Prefer: wait=30']);
+    echo 'uploaded: ' . ($file['id'] ?? '?') . ' status=' . ($file['status'] ?? '?')
+        . ' ready=' . (!empty($file['ready']) ? 'true' : 'false') . "\n";
 
-    // Processing is asynchronous. Needs the files:read scope to follow it.
-    for ($i = 0; $i < 40 && ($file['status'] ?? '') === 'processing'; $i++) {
+    // Follow it with GET /files/{id} (needs files:read) until Ask can use it, it needs
+    // attention or failed, or it waits for a duplicate decision.
+    $settled = function (array $f): bool {
+        return !empty($f['ready']) || !empty($f['decision_required'])
+            || in_array($f['status'] ?? '', ['needs_attention', 'failed'], true);
+    };
+    for ($i = 0; $i < 40 && !$settled($file); $i++) {
         sleep(3);
         $file = matih_request('GET', '/files/' . rawurlencode((string) $file['id']));
-        echo '  status=' . ($file['status'] ?? '?') . "\n";
+        echo '  status=' . ($file['status'] ?? '?') . ' ready=' . (!empty($file['ready']) ? 'true' : 'false') . "\n";
     }
     echo matih_pretty($file) . "\n";
     if (!empty($file['decision_required'])) {
-        echo "the file needs a decision (duplicate handling); see POST /files/{id}/duplicate\n";
+        echo 'the file is a duplicate and waits for a decision (' . implode(', ', $file['decision_options'] ?? [])
+            . "); see POST /files/{id}/duplicate\n";
     }
 }
 
 // ---------------------------------------------------------------------------
 // (7) Invite a member (admin action, members:manage)
 // ---------------------------------------------------------------------------
-// Only runs when you pass --invite. Valid role values come from GET /members.
+// Only runs when you pass --invite. role is viewer, user or admin (never owner).
 function example_invite_member(string $target, string $role): void
 {
     $key = strpos($target, '@') !== false ? 'email' : 'phone';
@@ -409,9 +414,9 @@ function main(): int
     $options = getopt('', ['upload:', 'invite:', 'role:', 'skip-predict', 'background']);
     $uploadPath = isset($options['upload']) && is_string($options['upload']) ? $options['upload'] : null;
     $inviteTarget = isset($options['invite']) && is_string($options['invite']) ? $options['invite'] : null;
-    $inviteRole = isset($options['role']) && is_string($options['role']) ? $options['role'] : null;
-    if ($inviteTarget !== null && $inviteRole === null) {
-        fwrite(STDERR, "--invite needs --role ROLE (valid values come from GET /members)\n");
+    $inviteRole = isset($options['role']) && is_string($options['role']) ? $options['role'] : 'user';
+    if ($inviteTarget !== null && !in_array($inviteRole, ['viewer', 'user', 'admin'], true)) {
+        fwrite(STDERR, "--role must be viewer, user or admin\n");
         return 2;
     }
 
