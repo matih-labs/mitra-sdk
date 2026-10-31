@@ -1,38 +1,50 @@
 # Scopes
 
-A scope is a permission a credential carries. Every `/api/v1` route declares the scope it needs;
-a credential without it gets `403` with category `scope` and nothing runs.
+A scope is a permission a credential carries. Every `/api/v1` route declares the scope it needs, and a
+build check fails for any route that declares none. A credential without the scope gets `403` with category
+`scope` and nothing runs.
 
-| Scope | Allows |
+There are exactly 13 scopes.
+
+| Scope | Endpoints that need it |
 |---|---|
-| `workspaces:read` | List workspaces; `use_workspace` for OAuth sessions |
-| `members:read` | List members and pending invitations |
-| `members:manage` | Invite, change role, remove members, revoke invitations (an admin member is also required) |
-| `sources:read` | List sources, read readiness, list connector types |
-| `sources:write` | Test, add, activate and delete sources (an admin member is also required to add) |
-| `files:read` | List and read uploaded files |
-| `files:write` | Upload files, answer duplicate prompts, delete files |
-| `gems:read` | List and read Gems and their images |
-| `gems:generate` | Generate Gems (spends credits) |
-| `ask` | Ask questions (text and audio), conversations |
-| `dashboards:read` | List dashboards and render them as images |
-| `predict` | Run predictions (spends credits) |
-| `webhooks:manage` | Create, list, test and delete webhooks, read deliveries (admin member required) |
+| `workspaces:read` | `GET /workspaces`, `PUT /me/workspace` (an API key is pinned: naming another workspace is `403` category `workspace`), `GET /jobs/{id}`, `POST /jobs/{id}/cancel` |
+| `members:read` | `GET /members`, `GET /invitations` |
+| `members:manage` | `POST /invitations`, `DELETE /invitations/{id}`, `PATCH /members/{id}`, `DELETE /members/{id}` |
+| `sources:read` | `GET /connectors`, `GET /sources`, `GET /sources/{id}` |
+| `sources:write` | `POST /sources/test`, `POST /sources`, `POST /sources/{id}/activate`, `DELETE /sources/{id}` |
+| `files:read` | `GET /files`, `GET /files/{id}` |
+| `files:write` | `POST /files`, `POST /files/{id}/duplicate`, `DELETE /files/{id}` |
+| `gems:read` | `GET /gems`, `GET /gems/{id}`, `GET /gems/{id}/image.png` |
+| `gems:generate` | `POST /gems/generate` (spends credits) |
+| `ask` | `POST /ask`, `POST /ask/audio`, `GET /conversations`, `GET /conversations/{id}` (spends credits) |
+| `dashboards:read` | `GET /dashboards`, `GET /dashboards/{id}`, `POST /dashboards/{id}/image`, `GET /dashboards/{id}/image.png` |
+| `predict` | `POST /predictions` (spends credits) |
+| `webhooks:manage` | `GET`/`POST /webhooks`, `DELETE /webhooks/{id}`, `POST /webhooks/{id}/test`, `GET /webhooks/{id}/deliveries` |
+
+`GET /media/{token}.png` needs no credential: the unguessable link is the credential.
 
 ## Rules
 
 1. **Scopes only narrow.** The workspace role gate runs first, then the scope. A key with
-   `members:manage` made by a non-admin still cannot invite anyone.
-2. **Admins pick products, not scopes** when making an API key. See [Credentials and products](credentials.md).
-3. **Jobs.** `GET /jobs/{id}` needs any one of the scopes that start jobs (`ask`, `predict`,
-   `gems:generate`, `dashboards:read`).
+   `members:manage` made by a non-admin still cannot invite anyone, and the key is refused with
+   `403` category `workspace_role`.
+2. **Admins pick Products, not scopes** when they make an API key or an MCP connector in
+   **Settings › API & MCP**. Each Product stands for one or two scopes, and its *Allow changes* switch adds
+   the write one. See [Credentials and Products](credentials.md#products-and-the-scopes-they-grant).
+3. **Jobs.** `GET /jobs/{id}` and `POST /jobs/{id}/cancel` need `workspaces:read` **and** the scope of
+   the job's kind (`ask` for `ask`, `gems:generate`, `predict`, `dashboards:read`). A job the credential
+   has no scope for is a `404`, the same as one that does not exist.
 4. **MCP.** `tools/list` only offers tools the credential may call. See [MCP tools](../mcp/tools.md).
+5. **OAuth apps** ask for scopes by name on the consent screen. If an app names none it gets
+   `workspaces:read sources:read gems:read dashboards:read ask`. Today `files:read` and `files:write`
+   cannot be requested through OAuth; see [OAuth](../guides/oauth.md).
 
 ## Reading the error
 
 ```json
-{"detail": {"category": "scope", "message": "Missing scope: gems:generate"}}
+{"detail": {"category": "scope", "message": "This credential is not allowed to do that: it needs gems:generate."}}
 ```
 
-The message names the missing scope. Fix it by switching the matching product (and *Allow changes*
+The message names the missing scope. Fix it by switching the matching Product (and *Allow changes*
 if it is a write scope) on for the key in **Settings › API & MCP**.
