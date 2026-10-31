@@ -86,8 +86,9 @@ print(job.result["answer"], job.result.get("attachments"))
 
 `jobs.wait(job, timeout=1860, poll_interval=1.0, max_poll_interval=15.0, on_update=fn)` raises
 `JobTimeoutError` (the job keeps running) or `JobFailedError` (failed or cancelled). Predictions
-can take up to 30 minutes. Calls that cost credits send an `Idempotency-Key` automatically and
-reuse it across retries, so a retry is never charged twice. Pass `idempotency_key=` to control it.
+can take up to 30 minutes. `ask` and `predictions.create` send an `Idempotency-Key` automatically
+and reuse it across retries, so a retry is never charged twice (the server honours the key on
+these two calls only). Pass `idempotency_key=` to control it.
 
 ## Sources and files
 
@@ -95,7 +96,7 @@ reuse it across retries, so a retry is never charged twice. Pass `idempotency_ke
 client.sources.list()
 client.sources.get("src_1")                               # includes readiness
 client.sources.connectors()
-client.sources.test({"type": "postgres", "host": "...", "database": "..."})
+client.sources.test({"connector_type": "postgres", "display_name": "Orders DB", "host": "...", "database": "..."})
 try:
     client.sources.create({...}, activate=True)           # admin, sources:write
 except SourceTestFailedError as e:                        # HTTP 422
@@ -103,9 +104,9 @@ except SourceTestFailedError as e:                        # HTTP 422
 client.sources.activate("src_1"); client.sources.delete("src_1")
 
 # files: files:read to list and get; files:write to upload, answer a duplicate prompt and delete
-f = client.files.upload("sales.csv", on_duplicate="keep_both")   # CSV or Excel
-client.files.get(f.id)          # status, analysis state, decision_required
-client.files.duplicate(f.id, "keep_both")                 # answer a duplicate prompt
+f = client.files.upload("sales.csv", on_duplicate="ask")         # CSV or Excel; "ask" (default) or "keep_both"
+client.files.get(f.id)          # status, decision_required, decision_options
+client.files.duplicate(f.id, "use_existing")              # answer a duplicate prompt: use_existing, keep_both or cancel
 client.files.list(); client.files.delete(f.id)
 ```
 
@@ -146,9 +147,13 @@ Every long call (`gems.generate`, `predictions.create`, `dashboards.image`, `sou
 `files.upload`) takes:
 
 - `wait=` seconds (default 10 minutes for Gems, 5 for images, sources and files, 31 for
-  predictions). The SDK sends `Prefer: wait=N` (capped at what the server honours: 60 s, 120 s for
-  sources), and if the server answers `202` with a Job it polls that job until it finishes or
-  `wait` runs out (`JobTimeoutError`, the job keeps running).
+  predictions). The SDK sends `Prefer: wait=N` (the server honours at most 60 s for jobs, 120 s
+  for sources and files) and keeps polling until the result is final or `wait` runs out.
+    - Job calls (`gems.generate`, `predictions.create`, `dashboards.image`) poll the job. Running
+      out raises `JobTimeoutError`; the job keeps running.
+    - Resource calls (`sources.create`, `files.upload`) poll the source or the file. Running out
+      raises nothing: you get the source or file as it stands (for example `phase: building`), so
+      check `readiness.can_ask` or `status`.
 - `background=True` to return right away: the queued `Job`, or for `sources.create` and
   `files.upload` whatever the server answered. No `Prefer: wait` is sent.
 
@@ -186,7 +191,7 @@ asyncio.run(main())
 
 All API errors derive from `MitraError` with `.status`, `.category`, `.code`, `.request_id` and
 `.body`. Subclasses: `AuthError` (401), `PermissionDeniedError` (403: `scope`, `workspace_role`,
-`source_access`), `CreditsError` (402: `credits`, `member_cap`), `BusyError` (409),
+`source_access`), `CreditsError` (402: `not_ready`, `member_cap`), `BusyError` (409, a conflict with the current state),
 `RateLimitError` (429, `.retry_after`), `SourceTestFailedError` (422 from `sources.create`, `.test_result`), plus `JobFailedError`, `JobTimeoutError`. 429 is retried
 automatically (honouring `Retry-After`) up to `max_retries` (default 2), as are 5xx and network
 errors on GETs and on calls with an idempotency key.
