@@ -75,6 +75,12 @@ class Job(_Model):
     def is_terminal(self) -> bool:
         return self.state in TERMINAL_STATES
 
+    def as_answer(self) -> Answer:
+        """For a job of kind ``ask``: the finished :class:`Answer` held in ``result``."""
+        if not self.result:
+            raise ValueError(f"job {self.id} has no result yet (state={self.state})")
+        return Answer.model_validate(self.result)
+
 
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled"})
 

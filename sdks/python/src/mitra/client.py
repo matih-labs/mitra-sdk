@@ -63,6 +63,42 @@ def _audio_fields(
     return {k: v for k, v in fields.items() if v}
 
 
+# (cap on the Prefer wait value the server honours, default total wait in seconds)
+_WAIT_LIMITS = {
+    "gems": (60, 600.0),
+    "dashboard": (60, 300.0),
+    "prediction": (60, DEFAULT_JOB_TIMEOUT),
+    "source": (120, 300.0),
+    "file": (60, 300.0),
+}
+
+
+def _long_plan(kind: str, wait: float | None, background: bool) -> tuple[str | None, float]:
+    """Return the ``Prefer`` header value and the total seconds the SDK may block."""
+    cap, default = _WAIT_LIMITS[kind]
+    timeout = float(default if wait is None else wait)
+    prefer = None if background else f"wait={max(0, min(int(timeout), cap))}"
+    return prefer, timeout
+
+
+def timeout_for(prefer: str | None) -> float:
+    """Seconds an HTTP attempt must be allowed so a server-side ``wait=N`` can finish first."""
+    if prefer and prefer.startswith("wait="):
+        return int(prefer[5:]) + 15.0
+    return 0.0
+
+
+def _job_opts(opts: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in opts.items() if k in ("workspace_id", "language")}
+
+
+def _ask_result(status: int, payload: Any) -> Answer | Job:
+    """``ask`` returns an Answer, or a Job when ``Prefer: respond-async`` was honoured."""
+    if status == 202 or (isinstance(payload, dict) and "state" in payload and "kind" in payload):
+        return Job.model_validate(payload)
+    return Answer.model_validate(payload)
+
+
 def _poll_delays(interval: float, max_interval: float) -> Iterator[float]:
     delay = interval
     while True:
@@ -109,11 +145,26 @@ class _Sources(_Resources):
         """One source, including its readiness."""
         return self._c.request("GET", f"/sources/{source_id}", **opts)
 
-    def create(self, config: dict[str, Any], *, activate: bool = True, **opts: _Opts) -> Any:
-        """Connect a source (admin, ``sources:write``). Raises :class:`SourceTestFailedError`
-        (HTTP 422, with ``.test_result``) when the connection test fails."""
-        return self._c.request(
-            "POST", "/sources", json_body={"config": config, "activate": activate}, **opts
+    def create(
+        self,
+        config: dict[str, Any],
+        *,
+        activate: bool = True,
+        wait: float | None = None,
+        background: bool = False,
+        **opts: _Opts,
+    ) -> Any:
+        """Connect a source (admin, ``sources:write``).
+
+        By default waits (``wait`` seconds, default 300) until the catalog is ready and returns
+        the created source, or the finished :class:`Job` if the server answered 202.
+        ``background=True`` returns right away with whatever the server answered (the source,
+        or a Job to poll with ``jobs.wait``). Raises :class:`SourceTestFailedError` (HTTP 422,
+        ``.test_result``) when the connection test fails."""
+        return self._c.long(
+            "POST", "/sources", kind="source", wait=wait, background=background,
+            final=lambda payload: payload,
+            json_body={"config": config, "activate": activate}, **opts,
         )
 
     def activate(self, source_id: str, **opts: _Opts) -> Any:
@@ -134,19 +185,23 @@ class _Files(_Resources):
         filename: str | None = None,
         content_type: str | None = None,
         on_duplicate: str | None = None,
+        wait: float | None = None,
+        background: bool = False,
         **opts: _Opts,
     ) -> Any:
-        """Upload a CSV or Excel file (``sources:write``). Returns a :class:`File`; poll
-        ``files.get`` until ready. ``on_duplicate`` says what to do if the file already exists;
-        without it a ``decision_required`` file waits for ``files.duplicate``."""
+        """Upload a CSV or Excel file (``files:write``).
+
+        By default waits (``wait`` seconds, default 300) for processing and returns the
+        :class:`File`, or the finished :class:`Job` if the server answered 202. ``background=True``
+        returns right away (a File to poll with ``files.get``, or a Job). ``on_duplicate`` says
+        what to do if the file already exists; without it a ``decision_required`` file waits for
+        ``files.duplicate``."""
         part = _file_part(file, filename, content_type)
-        return self._c.request(
-            "POST",
-            "/files",
+        return self._c.long(
+            "POST", "/files", kind="file", wait=wait, background=background,
+            final=File.model_validate,
             files={"file": part},
-            data={"on_duplicate": on_duplicate} if on_duplicate else None,
-            parse=File.model_validate,
-            **opts,
+            data={"on_duplicate": on_duplicate} if on_duplicate else None, **opts,
         )
 
     def list(self, **opts: _Opts) -> Any:
@@ -172,15 +227,14 @@ class _Gems(_Resources):
             "GET", "/gems", params={"source_id": source_id}, parse=GemList.model_validate, **opts
         )
 
-    def generate(self, source_id: str, **opts: _Opts) -> Any:
-        """Start Gem generation. Returns a 202 :class:`Job`; use ``jobs.wait``."""
-        return self._c.request(
-            "POST",
-            "/gems/generate",
-            json_body={"source_id": source_id},
-            parse=_as_job,
-            idempotent=True,
-            **opts,
+    def generate(
+        self, source_id: str, *, wait: float | None = None, background: bool = False, **opts: _Opts
+    ) -> Any:
+        """Generate Gems. Blocks until done (up to ``wait`` seconds, default 600) and returns the
+        finished :class:`Job`; ``background=True`` returns the queued Job immediately."""
+        return self._c.long(
+            "POST", "/gems/generate", kind="gems", wait=wait, background=background,
+            final=_as_job, json_body={"source_id": source_id}, idempotent=True, **opts,
         )
 
     def get(self, gem_id: str, **opts: _Opts) -> Any:
@@ -200,11 +254,16 @@ class _Dashboards(_Resources):
             "GET", f"/dashboards/{dashboard_id}", parse=Dashboard.model_validate, **opts
         )
 
-    def image(self, dashboard_id: str, **opts: _Opts) -> Any:
-        """Start rendering a dashboard image. Returns a 202 :class:`Job` whose result is
-        ``{image_url, width, height}``. See ``render`` for the one-call version."""
-        return self._c.request(
-            "POST", f"/dashboards/{dashboard_id}/image", parse=_as_job, idempotent=True, **opts
+    def image(
+        self, dashboard_id: str, *, wait: float | None = None, background: bool = False,
+        **opts: _Opts,
+    ) -> Any:
+        """Render a dashboard image. Blocks until done (up to ``wait`` seconds, default 300) and
+        returns the finished :class:`Job` whose result is ``{image_url, width, height}``;
+        ``background=True`` returns the Job immediately. See ``render`` for PNG bytes."""
+        return self._c.long(
+            "POST", f"/dashboards/{dashboard_id}/image", kind="dashboard", wait=wait,
+            background=background, final=_as_job, idempotent=True, **opts,
         )
 
 
@@ -215,17 +274,20 @@ class _Predictions(_Resources):
         *,
         source_id: str | None = None,
         conversation_id: str | None = None,
+        wait: float | None = None,
+        background: bool = False,
         **opts: _Opts,
     ) -> Any:
-        """Start a forecast or what-if. Returns a 202 :class:`Job` (can take up to 30 minutes)."""
+        """Run a forecast or what-if (can take up to 30 minutes).
+
+        Blocks until done (up to ``wait`` seconds, default 1860) and returns the finished
+        :class:`Job`; ``background=True`` returns the queued Job immediately so you can poll
+        with ``jobs.wait`` or wait for a webhook."""
         body = {"question": question, "source_id": source_id, "conversation_id": conversation_id}
-        return self._c.request(
-            "POST",
-            "/predictions",
-            json_body={k: v for k, v in body.items() if v is not None},
-            parse=_as_job,
-            idempotent=True,
-            **opts,
+        return self._c.long(
+            "POST", "/predictions", kind="prediction", wait=wait, background=background,
+            final=_as_job, json_body={k: v for k, v in body.items() if v is not None},
+            idempotent=True, **opts,
         )
 
 
@@ -331,26 +393,62 @@ class _SyncCore:
         *,
         parse: Callable[[Any], Any] | None = None,
         raw: bool = False,
+        with_status: bool = False,
+        request_timeout: float | None = None,
         **prep: Any,
     ) -> Any:
         kwargs = _core.prepare(self.settings, method, path, **prep)
+        timeout = request_timeout or self.settings.timeout
         attempt = 0
         while True:
             response: httpx.Response | None = None
             try:
-                response = self.http.request(**kwargs, timeout=self.settings.timeout)
+                response = self.http.request(**kwargs, timeout=timeout)
             except httpx.TransportError as exc:
                 if not _core.should_retry(kwargs, None, attempt, self.settings.max_retries):
                     raise MitraError(f"network error: {exc}") from exc
             if response is not None:
                 if response.status_code < 400:
-                    return _core.decode(response, parse, raw)
+                    decoded = _core.decode(response, parse, raw)
+                    return (response.status_code, decoded) if with_status else decoded
                 if response.status_code not in _core.RETRY_STATUSES or not _core.should_retry(
                     kwargs, response.status_code, attempt, self.settings.max_retries
                 ):
                     _core.raise_for_response(response)
             time.sleep(_core.retry_delay(response, attempt))
             attempt += 1
+
+    def long(
+        self,
+        method: str,
+        path: str,
+        *,
+        kind: str,
+        wait: float | None,
+        background: bool,
+        final: Callable[[Any], Any],
+        **prep: Any,
+    ) -> Any:
+        """A call that may outlive one request: send ``Prefer: wait=N``, and on 202 poll the job."""
+        prefer, timeout = _long_plan(kind, wait, background)
+        started = time.monotonic()
+        status, payload = self.request(
+            method, path, prefer=prefer, with_status=True,
+            request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
+        )
+        if status == 202:
+            job = _as_job(payload)
+            if background:
+                return job
+            left = max(timeout - (time.monotonic() - started), 0.0)
+            return self.jobs.wait(job, left, **_job_opts(prep))
+        result = final(payload)
+        if isinstance(result, Job) and not background:
+            if result.is_terminal:
+                return _check_terminal(result)
+            left = max(timeout - (time.monotonic() - started), 0.0)
+            return self.jobs.wait(result, left, **_job_opts(prep))
+        return result
 
     def stream(self, **prep: Any) -> Iterator[StreamEvent]:
         kwargs = _core.prepare(self.settings, "POST", "/ask", accept="text/event-stream", **prep)
@@ -377,8 +475,8 @@ class _SyncJobs(_JobsBase):
     def wait(
         self,
         job: Job | str,
-        *,
         timeout: float = DEFAULT_JOB_TIMEOUT,
+        *,
         poll_interval: float = 1.0,
         max_poll_interval: float = 15.0,
         on_update: Callable[[Job], None] | None = None,
@@ -409,16 +507,14 @@ class _SyncJobs(_JobsBase):
 class _SyncDashboards(_Dashboards):
     def render(self, dashboard_id: str, *, timeout: float = 300.0, **opts: _Opts) -> bytes:
         """Render a dashboard and return PNG bytes (starts the job, waits, downloads)."""
-        job = self._c.jobs.wait(self.image(dashboard_id, **opts), timeout=timeout, **opts)
+        job = self.image(dashboard_id, wait=timeout, **opts)
         return self._c.download((job.result or {})["image_url"])
 
 
 class _SyncPredictions(_Predictions):
     def run(self, question: str, *, timeout: float = DEFAULT_JOB_TIMEOUT, **kw: Any) -> Job:
         """Create a prediction and wait for it. Returns the finished :class:`Job`."""
-        wait_keys = {"poll_interval", "max_poll_interval", "on_update"}
-        wait_kw = {k: kw.pop(k) for k in list(kw) if k in wait_keys}
-        return self._c.jobs.wait(self.create(question, **kw), timeout=timeout, **wait_kw)
+        return self.create(question, wait=timeout, **kw)
 
 
 class Mitra:
@@ -495,18 +591,25 @@ class Mitra:
         conversation_id: str | None = None,
         source_id: str | None = None,
         language: str | None = None,
+        background: bool = False,
         **opts: _Opts,
-    ) -> Answer:
-        """Ask a question. Reuse ``answer.conversation_id`` for follow-ups."""
-        return self._core.request(
+    ) -> Answer | Job:
+        """Ask a question. Reuse ``answer.conversation_id`` for follow-ups.
+
+        With ``background=True`` the server is asked to respond asynchronously
+        (``Prefer: respond-async``) and a :class:`Job` of kind ``ask`` comes back at once; use
+        ``jobs.wait(job)`` and then ``job.as_answer()``."""
+        status, payload = self._core.request(
             "POST",
             "/ask",
             json_body=_ask_body(question, conversation_id, source_id, language, False),
-            parse=Answer.model_validate,
             idempotent=True,
             language=language,
+            prefer="respond-async" if background else None,
+            with_status=True,
             **opts,
         )
+        return _ask_result(status, payload)
 
     def ask_stream(
         self,
@@ -578,26 +681,62 @@ class _AsyncCore:
         *,
         parse: Callable[[Any], Any] | None = None,
         raw: bool = False,
+        with_status: bool = False,
+        request_timeout: float | None = None,
         **prep: Any,
     ) -> Any:
         kwargs = _core.prepare(self.settings, method, path, **prep)
+        timeout = request_timeout or self.settings.timeout
         attempt = 0
         while True:
             response: httpx.Response | None = None
             try:
-                response = await self.http.request(**kwargs, timeout=self.settings.timeout)
+                response = await self.http.request(**kwargs, timeout=timeout)
             except httpx.TransportError as exc:
                 if not _core.should_retry(kwargs, None, attempt, self.settings.max_retries):
                     raise MitraError(f"network error: {exc}") from exc
             if response is not None:
                 if response.status_code < 400:
-                    return _core.decode(response, parse, raw)
+                    decoded = _core.decode(response, parse, raw)
+                    return (response.status_code, decoded) if with_status else decoded
                 if response.status_code not in _core.RETRY_STATUSES or not _core.should_retry(
                     kwargs, response.status_code, attempt, self.settings.max_retries
                 ):
                     _core.raise_for_response(response)
             await asyncio.sleep(_core.retry_delay(response, attempt))
             attempt += 1
+
+    async def long(
+        self,
+        method: str,
+        path: str,
+        *,
+        kind: str,
+        wait: float | None,
+        background: bool,
+        final: Callable[[Any], Any],
+        **prep: Any,
+    ) -> Any:
+        """A call that may outlive one request: send ``Prefer: wait=N``, and on 202 poll the job."""
+        prefer, timeout = _long_plan(kind, wait, background)
+        started = time.monotonic()
+        status, payload = await self.request(
+            method, path, prefer=prefer, with_status=True,
+            request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
+        )
+        if status == 202:
+            job = _as_job(payload)
+            if background:
+                return job
+            left = max(timeout - (time.monotonic() - started), 0.0)
+            return await self.jobs.wait(job, left, **_job_opts(prep))
+        result = final(payload)
+        if isinstance(result, Job) and not background:
+            if result.is_terminal:
+                return _check_terminal(result)
+            left = max(timeout - (time.monotonic() - started), 0.0)
+            return await self.jobs.wait(result, left, **_job_opts(prep))
+        return result
 
     async def stream(self, **prep: Any) -> AsyncIterator[StreamEvent]:
         kwargs = _core.prepare(self.settings, "POST", "/ask", accept="text/event-stream", **prep)
@@ -627,8 +766,8 @@ class _AsyncJobs(_JobsBase):
     async def wait(
         self,
         job: Job | str,
-        *,
         timeout: float = DEFAULT_JOB_TIMEOUT,
+        *,
         poll_interval: float = 1.0,
         max_poll_interval: float = 15.0,
         on_update: Callable[[Job], Any] | None = None,
@@ -659,16 +798,14 @@ class _AsyncJobs(_JobsBase):
 class _AsyncDashboards(_Dashboards):
     async def render(self, dashboard_id: str, *, timeout: float = 300.0, **opts: _Opts) -> bytes:
         """Render a dashboard and return PNG bytes (starts the job, waits, downloads)."""
-        job = await self._c.jobs.wait(await self.image(dashboard_id, **opts), timeout=timeout, **opts)
+        job = await self.image(dashboard_id, wait=timeout, **opts)
         return await self._c.download((job.result or {})["image_url"])
 
 
 class _AsyncPredictions(_Predictions):
     async def run(self, question: str, *, timeout: float = DEFAULT_JOB_TIMEOUT, **kw: Any) -> Job:
         """Create a prediction and wait for it. Returns the finished :class:`Job`."""
-        wait_keys = {"poll_interval", "max_poll_interval", "on_update"}
-        wait_kw = {k: kw.pop(k) for k in list(kw) if k in wait_keys}
-        return await self._c.jobs.wait(await self.create(question, **kw), timeout=timeout, **wait_kw)
+        return await self.create(question, wait=timeout, **kw)
 
 
 class AsyncMitra:
@@ -734,17 +871,21 @@ class AsyncMitra:
         conversation_id: str | None = None,
         source_id: str | None = None,
         language: str | None = None,
+        background: bool = False,
         **opts: _Opts,
-    ) -> Answer:
-        return await self._core.request(
+    ) -> Answer | Job:
+        """Async version of :meth:`Mitra.ask`; ``background=True`` returns a :class:`Job`."""
+        status, payload = await self._core.request(
             "POST",
             "/ask",
             json_body=_ask_body(question, conversation_id, source_id, language, False),
-            parse=Answer.model_validate,
             idempotent=True,
             language=language,
+            prefer="respond-async" if background else None,
+            with_status=True,
             **opts,
         )
+        return _ask_result(status, payload)
 
     def ask_stream(
         self,

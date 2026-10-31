@@ -50,6 +50,7 @@ class Settings:
         language: str | None = None,
         idempotency_key: str | None = None,
         accept: str = "application/json",
+        prefer: str | None = None,
     ) -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self.credential}",
@@ -64,6 +65,8 @@ class Settings:
             headers["Accept-Language"] = lang
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+        if prefer:
+            headers["Prefer"] = prefer
         return headers
 
 
@@ -81,6 +84,7 @@ def prepare(
     idempotent: bool = False,
     idempotency_key: str | None = None,
     accept: str = "application/json",
+    prefer: str | None = None,
 ) -> dict[str, Any]:
     """Build kwargs for ``httpx.Client.request``. The idempotency key is fixed here, once."""
     key = idempotency_key or (str(uuid.uuid4()) if idempotent else None)
@@ -88,7 +92,11 @@ def prepare(
         "method": method,
         "url": settings.base_url + path,
         "headers": settings.headers(
-            workspace_id=workspace_id, language=language, idempotency_key=key, accept=accept
+            workspace_id=workspace_id,
+            language=language,
+            idempotency_key=key,
+            accept=accept,
+            prefer=prefer,
         ),
     }
     if params:
