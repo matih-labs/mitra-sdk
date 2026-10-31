@@ -439,7 +439,7 @@ Every API error derives from `MitraError`. The class is chosen from the HTTP sta
 | Exception | Status | Typical `category` | Extra attributes |
 |---|---|---|---|
 | `AuthError` | 401 | | |
-| `CreditsError` | 402 | `credits`, `member_cap` | |
+| `CreditsError` | 402 | `not_ready`, `member_cap` | |
 | `PermissionDeniedError` | 403 | `scope`, `workspace_role`, `source_access` | |
 | `BusyError` | 409 | `busy` | |
 | `SourceTestFailedError` | 422 from `sources.create` | | `test_result` |
@@ -550,7 +550,7 @@ from mitra import Mitra, CreditsError
 def handler(request: httpx.Request) -> httpx.Response:
     assert request.headers["Authorization"] == "Bearer mtk_test"
     assert request.headers["Idempotency-Key"]
-    return httpx.Response(402, json={"detail": {"category": "credits", "message": "Out of credits"}})
+    return httpx.Response(402, json={"detail": {"category": "not_ready", "message": "Out of credits"}})
 
 client = Mitra(api_key="mtk_test", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
 try:

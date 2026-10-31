@@ -17,14 +17,13 @@ People on WhatsApp, Telegram or a phone app often send a voice note instead of t
 | `source_id` | no | The data source to ask. |
 | `language` | no | The language spoken, for example `hi-IN`. Otherwise it is detected. |
 
-Send an `Idempotency-Key` so a retry is never charged twice (the SDKs do this for you).
+`Idempotency-Key` is honoured on `POST /ask` and `POST /predictions`, not on `/ask/audio`. A question that fails, is refused or is cancelled is never charged, so retry a failed voice request freely, but do not blindly resend one that already answered.
 
 === "curl"
 
     ```bash
     curl -s https://workspace.matih.ai/api/v1/ask/audio \
       -H "Authorization: Bearer $MATIH_API_KEY" \
-      -H "Idempotency-Key: $(uuidgen)" \
       -F file=@question.ogg \
       -F source_id=SOURCE_ID \
       -F language=hi-IN
@@ -90,7 +89,6 @@ Send an `Idempotency-Key` so a retry is never charged twice (the SDKs do this fo
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.MATIH_API_KEY}`,
-        "Idempotency-Key": crypto.randomUUID(),
       },
       body: form, // fetch sets the multipart boundary itself
     });
@@ -126,7 +124,6 @@ Send an `Idempotency-Key` so a retry is never charged twice (the SDKs do this fo
 
             HttpRequest req = HttpRequest.newBuilder(URI.create("https://workspace.matih.ai/api/v1/ask/audio"))
                 .header("Authorization", "Bearer " + System.getenv("MATIH_API_KEY"))
-                .header("Idempotency-Key", UUID.randomUUID().toString())
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(out.toByteArray()))
                 .build();
@@ -187,7 +184,6 @@ Send an `Idempotency-Key` so a retry is never charged twice (the SDKs do this fo
     var http = new HttpClient();
     http.DefaultRequestHeaders.Authorization =
         new AuthenticationHeaderValue("Bearer", Environment.GetEnvironmentVariable("MATIH_API_KEY"));
-    http.DefaultRequestHeaders.Add("Idempotency-Key", Guid.NewGuid().ToString());
 
     using var form = new MultipartFormDataContent();
     var file = new ByteArrayContent(await File.ReadAllBytesAsync("question.ogg"));
@@ -209,7 +205,6 @@ Send an `Idempotency-Key` so a retry is never charged twice (the SDKs do this fo
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HTTPHEADER => [
             "Authorization: Bearer " . getenv("MATIH_API_KEY"),
-            "Idempotency-Key: " . bin2hex(random_bytes(16)),
         ],
         CURLOPT_POSTFIELDS => [
             "file" => new CURLFile("question.ogg", "audio/ogg", "question.ogg"),
@@ -227,8 +222,7 @@ Send an `Idempotency-Key` so a retry is never charged twice (the SDKs do this fo
 
     uri = URI("https://workspace.matih.ai/api/v1/ask/audio")
     req = Net::HTTP::Post.new(uri, {
-      "Authorization" => "Bearer #{ENV['MATIH_API_KEY']}",
-      "Idempotency-Key" => SecureRandom.uuid
+      "Authorization" => "Bearer #{ENV['MATIH_API_KEY']}"
     })
     req.set_form(
       [["file", File.open("question.ogg", "rb"), { filename: "question.ogg", content_type: "audio/ogg" }],
@@ -265,7 +259,7 @@ Echo `heard.transcript` back to the person (for example "I heard: ...") so they 
 | 415 | `unsupported_audio_type` | Not an audio content type | Convert (see below) |
 | 413 | `audio_too_large` | Over 5 MB | Ask the user for a shorter note, or re-encode at a lower bitrate |
 | 422 | `not_heard` | Empty file, or no speech in it | Ask the user to try again; do not retry unchanged |
-| 503 | `speech_unavailable` | Speech service busy | Retry after a few seconds, with the same `Idempotency-Key` |
+| 503 | `speech_unavailable` | Speech service busy | Retry after a few seconds |
 | 503 | `language_unavailable` | This deployment has no language service configured | Fall back to text |
 
 Plus the usual [errors](../concepts/errors.md): 401, 402 (credits), 403 `scope`, 429.

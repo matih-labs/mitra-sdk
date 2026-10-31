@@ -356,6 +356,6 @@ Python `client.jobs.cancel(job_id)`; TypeScript `mitra.jobs.cancel(id)`. A job a
 
 ## When it fails
 
-A job with `state: "failed"` carries `error.category` and `error.message`. Do not blindly re-run. If the cause is the question (not enough history, no time column), suggest a better-suited question or source. A `402` `credits` error when starting means the workspace is out of credits: stop and tell an admin ([Credits](../concepts/credits.md)).
+A job with `state: "failed"` carries `error.category` and `error.message`. Do not blindly re-run. If the cause is the question (not enough history, no time column), suggest a better-suited question or source. A `402` `not_ready` error when starting means the workspace is out of credits: stop and tell an admin ([Credits](../concepts/credits.md)).
 
 Predictions can also be asked in other languages; see [Multilingual bots](multilingual.md). More on states and timing: [Jobs](../concepts/jobs.md).

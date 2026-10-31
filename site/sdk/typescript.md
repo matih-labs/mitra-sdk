@@ -377,7 +377,7 @@ Every API failure throws a subclass of `MitraError`, chosen from the HTTP status
 | Class | Status | Typical `category` | Extra fields |
 |---|---|---|---|
 | `AuthError` | 401 | `auth` | |
-| `CreditsError` | 402 | `credits`, `member_cap` | |
+| `CreditsError` | 402 | `not_ready`, `member_cap` | |
 | `PermissionError` | 403 | `scope`, `workspace_role`, `source_access` | |
 | `BusyError` | 409 | `busy` | |
 | `SourceTestFailedError` | 422 from `sources.create` | `source_test` | `testResult` |
@@ -470,7 +470,7 @@ const mitra = new Mitra({
     const headers = new Headers(init?.headers);
     if (!headers.get("Idempotency-Key")) throw new Error("expected an idempotency key");
     return new Response(
-      JSON.stringify({ detail: { category: "credits", message: "Out of credits" } }),
+      JSON.stringify({ detail: { category: "not_ready", message: "Out of credits" } }),
       { status: 402, headers: { "content-type": "application/json" } },
     );
   },

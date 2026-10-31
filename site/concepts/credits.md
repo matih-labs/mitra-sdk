@@ -16,19 +16,21 @@ the same pool and the same member caps the Matih app uses. Every charge records 
 
 ## When credits run out
 
-A `402` with category `credits` means the workspace pool is empty: stop and tell a workspace admin.
+A `402` with category `not_ready` means the workspace pool is empty: nothing ran and nothing was charged. Stop and tell a workspace admin.
 A `402` with category `member_cap` means the member the key acts as has reached their monthly cap.
 Neither is fixed by retrying.
 
 ```json
-{"detail": {"category": "credits", "message": "The workspace is out of credits."}}
+{"detail": {"category": "not_ready", "message": "The workspace is out of credits."}}
 ```
 
 ## Avoid paying twice
 
-Send an `Idempotency-Key` on every credit-spending `POST`. A retry (after a timeout, a dropped
+Send an `Idempotency-Key` on `POST /ask` and `POST /predictions`. A retry (after a timeout, a dropped
 connection or a `5xx`) with the same key returns the original result and is charged once. The
-Python and TypeScript SDKs do this automatically and reuse the key across their own retries.
+Python and TypeScript SDKs generate one for you and reuse it across their own retries. A question that
+fails, is cancelled or is refused is never charged. Other credit-spending calls (`POST /gems/generate`,
+`POST /ask/audio`) ignore the header, so do not resend one that has already succeeded.
 
 ## Budgeting a bot
 

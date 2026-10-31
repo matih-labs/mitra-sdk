@@ -364,7 +364,7 @@ Answers can carry an `image_url`: a signed link that expires in 15 minutes and n
 
 | What you see | Meaning | What the bot does |
 |---|---|---|
-| `402` `credits` | The workspace pool is empty | Tell the user once; do not retry. An admin adds credits |
+| `402` `not_ready` | The workspace pool is empty | Tell the user once; do not retry. An admin adds credits |
 | `402` `member_cap` | The member's monthly cap is reached | Tell the user a cap was reached |
 | `403` `scope` | **Ask** is off for the key | A deploy problem; alert yourself, tell the user it is unavailable |
 | `409` `busy` | A request is already running in this conversation | Wait 3 to 5 s, retry with the same `Idempotency-Key` |
