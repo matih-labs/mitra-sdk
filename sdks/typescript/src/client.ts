@@ -1,10 +1,11 @@
 import createClient from "openapi-fetch";
 import { MitraError, JobFailedError, JobTimeoutError, sourceErrorFromResponse } from "./errors.js";
-import { HttpClient, sleep } from "./http.js";
+import { HttpClient, sleep, type SendOptions } from "./http.js";
 import { parseSSE } from "./sse.js";
 import { isTerminalJob } from "./types.js";
 import type {
   Answer,
+  AskOptions,
   AskAudioParams,
   AskParams,
   Conversation,
@@ -23,6 +24,7 @@ import type {
   InvitationList,
   Invitation,
   Job,
+  LongCallOptions,
   Member,
   MemberList,
   PredictionParams,
@@ -120,7 +122,7 @@ class JobsApi {
    */
   async wait<R = Record<string, unknown>>(job: Job<R> | string, opts: WaitOptions = {}): Promise<Job<R>> {
     const id = typeof job === "string" ? job : job.id;
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+    const timeoutMs = opts.timeoutMs ?? (opts.timeout !== undefined ? opts.timeout * 1000 : DEFAULT_WAIT_TIMEOUT_MS);
     const maxInterval = opts.maxPollIntervalMs ?? 10_000;
     const factor = opts.backoffFactor ?? 1.5;
     const reqOpts = requestOnly(opts);
@@ -145,6 +147,71 @@ class JobsApi {
   }
 }
 
+type LongKind = "gems" | "dashboard" | "prediction" | "source" | "file";
+
+/** Largest `Prefer: wait` the server honours, and the default total wait, in seconds. */
+const LONG_LIMITS: Record<LongKind, { cap: number; defaultWait: number }> = {
+  gems: { cap: 60, defaultWait: 600 },
+  dashboard: { cap: 60, defaultWait: 300 },
+  prediction: { cap: 60, defaultWait: 1860 },
+  source: { cap: 120, defaultWait: 300 },
+  file: { cap: 60, defaultWait: 300 },
+};
+
+function parseBody(res: Response, text: string): unknown {
+  if (text === "") return undefined;
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    throw new MitraError("The server returned a response that is not valid JSON", {
+      status: res.status,
+      category: "invalid_response",
+      body: text,
+      cause,
+    });
+  }
+}
+
+/**
+ * Run a call that may outlive one request. Sends `Prefer: wait=N` (unless
+ * `background`), and when the server answers 202 with a job, either returns it
+ * (`background`) or polls it to the end. `jobShaped` calls always carry a job,
+ * even in a 200 or 201 answer; the others carry the created resource there.
+ */
+async function longCall(
+  http: HttpClient,
+  jobs: JobsApi,
+  kind: LongKind,
+  o: SendOptions,
+  opts: LongCallOptions = {},
+  jobShaped = true,
+): Promise<unknown> {
+  const { wait, background, pollIntervalMs, onProgress, ...request } = opts;
+  const { cap, defaultWait } = LONG_LIMITS[kind];
+  const seconds = wait ?? defaultWait;
+  const started = Date.now();
+  const sent = Math.max(0, Math.min(Math.floor(seconds), cap));
+  const res = await http.send({
+    ...o,
+    headers: background ? o.headers : { ...o.headers, Prefer: `wait=${sent}` },
+    // The server may hold the request for `sent` seconds, so the per-attempt timeout must outlast it.
+    request: { ...request, timeoutMs: request.timeoutMs ?? Math.max(http.config.timeoutMs, (sent + 15) * 1000) },
+  });
+  const payload = parseBody(res, await res.text());
+  if (res.status !== 202 && !jobShaped) return payload;
+  const job = payload as Job;
+  if (background) return job;
+  return jobs.wait(job, {
+    workspaceId: request.workspaceId,
+    language: request.language,
+    signal: request.signal,
+    maxRetries: request.maxRetries,
+    pollIntervalMs,
+    onProgress,
+    timeoutMs: Math.max(0, seconds * 1000 - (Date.now() - started)),
+  });
+}
+
 class WorkspacesApi {
   constructor(private readonly http: HttpClient) {}
 
@@ -165,7 +232,10 @@ class WorkspacesApi {
 }
 
 class SourcesApi {
-  constructor(private readonly http: HttpClient) {}
+  constructor(
+    private readonly http: HttpClient,
+    private readonly jobs: JobsApi,
+  ) {}
 
   list(opts?: RequestOptions): Promise<SourceList> {
     return this.http.json<SourceList>({ method: "GET", path: "/sources", request: opts });
@@ -188,17 +258,26 @@ class SourcesApi {
 
   /**
    * Create a source (needs a workspace admin and the `sources:write` scope).
+   * Waits (`wait` seconds, default 300) until the catalog is ready and returns
+   * the source, or the finished job when the server answered 202; with
+   * `background: true` it returns right away with the source or a job.
    * The connection is tested first; when the test fails nothing is saved and
    * SourceTestFailedError is thrown with the test outcome in `testResult`.
    */
-  create(params: CreateSourceParams, opts?: RequestOptions): Promise<Source> {
-    return this.http.json<Source>({
-      method: "POST",
-      path: "/sources",
-      json: { config: params.config, activate: params.activate ?? true },
-      request: opts,
-      mapError: sourceErrorFromResponse,
-    });
+  create(params: CreateSourceParams, opts?: LongCallOptions): Promise<Source | Job> {
+    return longCall(
+      this.http,
+      this.jobs,
+      "source",
+      {
+        method: "POST",
+        path: "/sources",
+        json: { config: params.config, activate: params.activate ?? true },
+        mapError: sourceErrorFromResponse,
+      },
+      opts,
+      false,
+    ) as Promise<Source | Job>;
   }
 
   /** Make a source the workspace's active one. */
@@ -267,14 +346,23 @@ class ConnectorsApi {
 }
 
 class FilesApi {
-  constructor(private readonly http: HttpClient) {}
+  constructor(
+    private readonly http: HttpClient,
+    private readonly jobs: JobsApi,
+  ) {}
 
-  /** Upload a CSV or Excel file as multipart form data. */
-  upload(file: BinaryInput, params: UploadOptions = {}, opts?: RequestOptions): Promise<UploadedFile> {
+  /**
+   * Upload a CSV or Excel file as multipart form data. Waits for processing
+   * (`wait` seconds, default 300) and returns the file, or the finished job
+   * when the server answered 202; `background: true` returns right away.
+   */
+  upload(file: BinaryInput, params: UploadOptions = {}, opts?: LongCallOptions): Promise<UploadedFile | Job> {
     const form = new FormData();
     form.append("file", toBlob(file, params.contentType), params.filename ?? "upload");
     if (params.onDuplicate !== undefined) form.append("on_duplicate", params.onDuplicate);
-    return this.http.json<UploadedFile>({ method: "POST", path: "/files", form, request: opts });
+    return longCall(this.http, this.jobs, "file", { method: "POST", path: "/files", form }, opts, false) as Promise<
+      UploadedFile | Job
+    >;
   }
 
   list(opts?: RequestOptions): Promise<UploadedFileList> {
@@ -359,16 +447,16 @@ class GemsApi {
     });
   }
 
-  /** Start generating Gems for a source. Returns a job; use `jobs.wait`. */
-  generate(source: string | { source_id: string }, opts?: RequestOptions): Promise<Job> {
+  /** Generate Gems for a source. Waits for the finished job (`wait` seconds, default 600); `background: true` returns the queued job. */
+  generate(source: string | { source_id: string }, opts?: LongCallOptions): Promise<Job> {
     const sourceId = typeof source === "string" ? source : source.source_id;
-    return this.http.json<Job>({
-      method: "POST",
-      path: "/gems/generate",
-      json: { source_id: sourceId },
-      autoIdempotency: true,
-      request: opts,
-    });
+    return longCall(
+      this.http,
+      this.jobs,
+      "gems",
+      { method: "POST", path: "/gems/generate", json: { source_id: sourceId }, autoIdempotency: true },
+      opts,
+    ) as Promise<Job>;
   }
 
   get(id: string, opts?: RequestOptions): Promise<Gem> {
@@ -395,14 +483,15 @@ class DashboardsApi {
     return this.http.json<Dashboard>({ method: "GET", path: `/dashboards/${enc(id)}`, request: opts });
   }
 
-  /** Start rendering a dashboard image. Returns a job whose result has `image_url`. */
-  image(id: string, opts?: RequestOptions): Promise<Job<DashboardImageResult>> {
-    return this.http.json<Job<DashboardImageResult>>({
-      method: "POST",
-      path: `/dashboards/${enc(id)}/image`,
-      autoIdempotency: true,
-      request: opts,
-    });
+  /** Render a dashboard image. Waits for the finished job (`wait` seconds, default 300), whose result has `image_url`; `background: true` returns the job at once. */
+  image(id: string, opts?: LongCallOptions): Promise<Job<DashboardImageResult>> {
+    return longCall(
+      this.http,
+      this.jobs,
+      "dashboard",
+      { method: "POST", path: `/dashboards/${enc(id)}/image`, autoIdempotency: true },
+      opts,
+    ) as Promise<Job<DashboardImageResult>>;
   }
 
   /** The dashboard image as PNG bytes, waiting for a render when none is cached. */
@@ -412,17 +501,24 @@ class DashboardsApi {
 }
 
 class PredictionsApi {
-  constructor(private readonly http: HttpClient) {}
+  constructor(
+    private readonly http: HttpClient,
+    private readonly jobs: JobsApi,
+  ) {}
 
-  /** Start a prediction. Returns a job that can take up to 30 minutes. */
-  create(params: PredictionParams, opts?: RequestOptions): Promise<Job<PredictionResult>> {
-    return this.http.json<Job<PredictionResult>>({
-      method: "POST",
-      path: "/predictions",
-      json: params,
-      autoIdempotency: true,
-      request: opts,
-    });
+  /**
+   * Run a prediction, which can take up to 30 minutes. Waits for the finished
+   * job (`wait` seconds, default 1860); `background: true` returns the queued
+   * job so you can poll with `jobs.wait` or wait for a webhook.
+   */
+  create(params: PredictionParams, opts?: LongCallOptions): Promise<Job<PredictionResult>> {
+    return longCall(
+      this.http,
+      this.jobs,
+      "prediction",
+      { method: "POST", path: "/predictions", json: params, autoIdempotency: true },
+      opts,
+    ) as Promise<Job<PredictionResult>>;
   }
 }
 
@@ -524,12 +620,12 @@ export class Mitra {
 
     this.jobs = new JobsApi(this.http);
     this.workspaces = new WorkspacesApi(this.http);
-    this.sources = new SourcesApi(this.http);
+    this.sources = new SourcesApi(this.http, this.jobs);
     this.connectors = new ConnectorsApi(this.http);
-    this.files = new FilesApi(this.http);
+    this.files = new FilesApi(this.http, this.jobs);
     this.gems = new GemsApi(this.http, this.jobs);
     this.dashboards = new DashboardsApi(this.http, this.jobs);
-    this.predictions = new PredictionsApi(this.http);
+    this.predictions = new PredictionsApi(this.http, this.jobs);
     this.webhooks = new WebhooksApi(this.http);
     this.conversations = new ConversationsApi(this.http);
     this.members = new MembersApi(this.http);
@@ -554,16 +650,37 @@ export class Mitra {
     });
   }
 
-  /** Ask a question of your data. Spends credits; safe to retry. */
-  ask(question: string | AskParams, opts?: RequestOptions): Promise<Answer> {
+  /**
+   * Ask a question of your data. Spends credits; safe to retry. With
+   * `{ background: true }` the server is asked to answer asynchronously
+   * (`Prefer: respond-async`) and a job of kind `ask` comes back at once;
+   * follow it with `jobs.wait`, and its `result` is the Answer.
+   */
+  ask(question: string | AskParams, opts: AskOptions & { background: true }): Promise<Job<Answer>>;
+  ask(question: string | AskParams, opts?: AskOptions & { background?: false }): Promise<Answer>;
+  async ask(question: string | AskParams, opts: AskOptions = {}): Promise<Answer | Job<Answer>> {
+    const { background, wait, ...request } = opts;
     const body = typeof question === "string" ? { question } : question;
-    return this.http.json<Answer>({
+    const res = await this.http.send({
       method: "POST",
       path: "/ask",
       json: body,
       autoIdempotency: true,
-      request: opts,
+      headers: background ? { Prefer: "respond-async" } : undefined,
+      request,
     });
+    const payload = parseBody(res, await res.text());
+    if (res.status !== 202) return payload as Answer;
+    const queued = payload as Job<Answer>;
+    if (background) return queued;
+    const done = await this.jobs.wait<Answer>(queued, {
+      workspaceId: request.workspaceId,
+      language: request.language,
+      signal: request.signal,
+      maxRetries: request.maxRetries,
+      timeout: wait ?? 600,
+    });
+    return done.result as Answer;
   }
 
   /**

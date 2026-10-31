@@ -255,7 +255,7 @@ describe("namespaces", () => {
 
   it("starts gem generation with an idempotency key", async () => {
     const m = sequence(jsonResponse(jobBody("queued", { kind: "gems" }), 202));
-    const job = await makeClient(m.fetch).gems.generate("src_1");
+    const job = await makeClient(m.fetch).gems.generate("src_1", { background: true });
     expect(job.state).toBe("queued");
     expect(JSON.parse(String(m.calls[0].body))).toEqual({ source_id: "src_1" });
     expect(m.calls[0].headers.get("idempotency-key")).toBeTruthy();
@@ -264,8 +264,8 @@ describe("namespaces", () => {
   it("creates predictions and dashboard images with idempotency keys", async () => {
     const m = sequence(jsonResponse(jobBody("queued"), 202));
     const c = makeClient(m.fetch);
-    await c.predictions.create({ question: "next quarter?" });
-    await c.dashboards.image("dash/1");
+    await c.predictions.create({ question: "next quarter?" }, { background: true });
+    await c.dashboards.image("dash/1", { background: true });
     expect(m.calls[0].url).toBe(`${BASE}/predictions`);
     expect(m.calls[1].url).toBe(`${BASE}/dashboards/dash%2F1/image`);
     expect(m.calls[0].headers.get("idempotency-key")).toBeTruthy();

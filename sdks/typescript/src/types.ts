@@ -142,6 +142,37 @@ export interface WaitOptions extends Omit<RequestOptions, "timeoutMs" | "idempot
   onProgress?: (job: Job) => void;
   /** Throw JobFailedError for failed and cancelled jobs. Default true. */
   throwOnFailure?: boolean;
+  /** Overall time to wait in seconds. Same as `timeoutMs`, in seconds; `timeoutMs` wins if both are set. */
+  timeout?: number;
+}
+
+/**
+ * Options for calls that can outlive one request: Gem generation, predictions,
+ * dashboard images, source creation and file uploads.
+ *
+ * By default the call blocks: it sends `Prefer: wait=N` and, when the server
+ * answers 202 with a job, polls the job until it finishes or `wait` runs out
+ * (then JobTimeoutError; the job keeps running). With `background: true` it
+ * returns right away with what the server answered, a job to follow with
+ * `jobs.wait` or a webhook.
+ */
+export interface LongCallOptions extends RequestOptions {
+  /** Seconds to wait in total. Defaults depend on the call (5 to 31 minutes). */
+  wait?: number;
+  /** Return the job (or whatever the server answered) immediately. */
+  background?: boolean;
+  /** First delay between job polls. Default 1000. */
+  pollIntervalMs?: number;
+  /** Called with every observed job state while waiting. */
+  onProgress?: (job: Job) => void;
+}
+
+/** Options for `ask`. With `background: true` the answer is delivered through a job. */
+export interface AskOptions extends RequestOptions {
+  /** Send `Prefer: respond-async` and return the job (kind `ask`) at once; its `result` is the Answer. */
+  background?: boolean;
+  /** Seconds to wait for a job the server chose to run asynchronously. Default 10 minutes. */
+  wait?: number;
 }
 
 /** Options for calls that return image bytes and may wait on a render job. */
