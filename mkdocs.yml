@@ -20,6 +20,9 @@ exclude_docs: |
 theme:
   name: material
   language: en
+  # Matih's official mark (the same file as matih.ai's header).
+  logo: assets/logo.png
+  favicon: assets/favicon.png
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default

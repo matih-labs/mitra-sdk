@@ -4,6 +4,8 @@ hide:
   - toc
 ---
 
+<p align="center"><img src="assets/logo.png" alt="Matih" width="120"></p>
+
 # Build on Matih
 
 Matih answers questions about your business data in plain language, finds the numbers worth
