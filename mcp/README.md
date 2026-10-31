@@ -20,7 +20,7 @@ Clients that support MCP authorization find the sign-in from the `WWW-Authentica
 ## Which auth to use
 
 - OAuth: best for interactive clients. You sign in once in the browser and the client handles tokens. It acts as you (an `mto_` access token), and you pick the workspace with `use_workspace` (or the `X-Matih-Workspace` header).
-- MCP connector key: best for MCP clients that take a header or token, and for headless agents and CI. An admin creates it in Matih under `Settings › API & MCP`. A connector key works only on `/api/v1/mcp` and returns 403 elsewhere. It is pinned to one workspace and acts as its creator, never exceeding that member's role.
+- MCP connector key: best for MCP clients that take a header or token, and for headless agents and CI. An admin creates it in Matih under `Settings › API & MCP`. A connector key works only on `/api/v1/mcp` and is refused with 401 everywhere else. It is pinned to one workspace and acts as its creator, never exceeding that member's role.
 - API key: also works on the MCP endpoint, and additionally on all of `/api/v1`. Prefer a connector key when the key is only for an MCP client.
 
 Admins choose the products a key may use (Ask, Data sources, Files, Predictive, Dashboards, Gems, Workspaces, Users & members, Webhooks; all on by default). A product that is switched off takes its scopes away, and its tools disappear from `tools/list` for that key. Keys never expire by default; revoke them in the same screen.
@@ -228,8 +228,8 @@ Wrong workspace or "source not found"
 Tool missing or "needs the scope ..."
 : The key's products leave that tool out (`tools/list` shows only what the credential may call), or the credential lacks the scope (for example `predict` or `gems:generate`). Ask an admin to switch the product on in `Settings › API & MCP`, or reconnect OAuth and approve the requested scopes. Failures from the tools come back as MCP tool errors (`isError: true`) in plain words.
 
-403 on a non-MCP path
-: A connector key works only on `/api/v1/mcp`. Use an API key for other `/api/v1` endpoints.
+401 on a non-MCP path
+: A connector key works only on `/api/v1/mcp` and any other path answers 401 ("works on the MCP endpoint only"). Use an API key for other `/api/v1` endpoints.
 
 403 workspace_role
 : Your role in that workspace is too low for the action. Ask a workspace admin.
