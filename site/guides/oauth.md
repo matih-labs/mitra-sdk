@@ -47,7 +47,24 @@ POST JSON to `/api/v1/oauth/register`. Do this once at deploy time and keep the 
 | `redirect_uris` | 1 to 10 URIs (rules below) |
 | `token_endpoint_auth_method` | `none` (public client, the default for apps that cannot keep a secret), `client_secret_post` or `client_secret_basic` |
 | `grant_types` | optional: `authorization_code`, `refresh_token` |
-| `scope` | optional, space-separated |
+| `scope` | optional, space-separated. The most this app may ever ask for; leave it out to allow every scope the consent page offers |
+| `response_types` | optional, if sent it must be `["code"]` |
+
+The answer is `201` with `Cache-Control: no-store`:
+
+```json
+{
+  "client_id": "mtc_0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "client_id_issued_at": 1793440000,
+  "client_name": "Acme Slack bot",
+  "redirect_uris": ["https://bot.example.com/oauth/callback"],
+  "token_endpoint_auth_method": "none",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"]
+}
+```
+
+A confidential client's answer also has `client_secret` and `"client_secret_expires_at": 0` (the secret does not expire). Unknown scopes, a bad `token_endpoint_auth_method` or a `grant_types` list without `authorization_code` are refused with `400` and `invalid_client_metadata`; a bad redirect URI is `invalid_redirect_uri`.
 
 A public client gets a `client_id` starting `mtc_`. A confidential client also gets a `client_secret` starting `mts_`, shown **once** and stored on Matih's side only as a hash.
 
@@ -124,11 +141,11 @@ For each person, make a fresh **code verifier** (a random string of 43 to 128 UR
 | `client_id` | your `mtc_...` |
 | `redirect_uri` | one you registered |
 | `code_challenge`, `code_challenge_method` | the challenge and `S256` (**required**) |
-| `scope` | optional, space-separated. Default: read and ask. Request only what you need. |
+| `scope` | optional, space-separated. Default when left out: `workspaces:read sources:read gems:read dashboards:read ask`. Writing and managing scopes are only ever granted when asked for by name. Request only what you need. |
 | `state` | your random value, returned unchanged |
 | `resource` | optional; if sent, must be `https://workspace.matih.ai/api/v1` (or `https://workspace.matih.ai/api/v1/mcp` for MCP) |
 
-Every refusal other than an unknown client or redirect URI comes back to your `redirect_uri` as `?error=...&state=...`. A valid request is kept for **10 minutes** while the person decides.
+Every refusal other than an unknown client or redirect URI comes back to your `redirect_uri` as `?error=...&error_description=...&state=...`. The codes are `invalid_request` (including a missing or non-`S256` challenge, which must be 43 to 128 URL-safe characters), `unsupported_response_type`, `invalid_scope` (unknown, or one your app did not register for) and `invalid_target` (a bad `resource`). A valid request is kept for **10 minutes** while the person decides.
 
 === "Python"
 
@@ -276,7 +293,41 @@ In your callback, check that `state` matches (and that there is no `error`), the
     }
     ```
 
+The answer (`200`, `Cache-Control: no-store`) is:
+
+```json
+{
+  "access_token": "mto_...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "mtr_...",
+  "scope": "ask sources:read workspaces:read"
+}
+```
+
+`expires_in` is in seconds and is shorter than 3600 only when the grant is about to end. `scope` is what the person approved. A confidential client authenticates the exchange with `client_secret` in the body or HTTP Basic; a public client sends only `client_id`. The `code_verifier` must be 43 to 128 characters from `A-Z a-z 0-9 - . _ ~`. The body may also be JSON.
+
 Store the token pair **per person**, encrypted at rest.
+
+### OAuth errors
+
+The OAuth endpoints answer in the standard OAuth shape, not the API's `detail` envelope:
+
+```json
+{"error": "invalid_grant", "error_description": "The code is invalid, expired or already used."}
+```
+
+| `error` | Status | Meaning |
+|---|---|---|
+| `invalid_request` | 400 | A parameter is missing or malformed (no `code`, request too large) |
+| `invalid_client` | 401 | Unknown client, or a confidential client's secret is wrong (Basic auth adds `WWW-Authenticate: Basic`) |
+| `invalid_grant` | 400 | The code or refresh token is unknown, expired, used, revoked or issued to another client; `redirect_uri` or `code_verifier` does not match |
+| `unauthorized_client` | 400 | The client did not register for that `grant_type` |
+| `unsupported_grant_type` | 400 | `grant_type` is neither `authorization_code` nor `refresh_token` |
+| `invalid_scope` | 400 | A refresh asked for a scope the grant does not have |
+
+!!! note "Scopes you can request today"
+    The consent page offers every scope except `files:read` and `files:write`. They work on API keys but are refused (`invalid_scope`) for OAuth apps for now. The discovery document still lists all 13.
 
 ## 4. Call the API as the person
 
@@ -348,6 +399,7 @@ A refresh may send `scope` to **narrow** the token, never to widen it. To get mo
                 "grant_type": "refresh_token",
                 "refresh_token": tokens["refresh_token"],
                 "client_id": CLIENT_ID,
+                # confidential client: also "client_secret": CLIENT_SECRET
             },
         )
         res.raise_for_status()
@@ -372,7 +424,7 @@ A refresh may send `scope` to **narrow** the token, never to widen it. To get mo
     }
     ```
 
-If the refresh fails, restart from step 2. Do not loop on a `401`.
+If the refresh fails with `invalid_grant` (expired, revoked, already rotated, or the 90-day grant is over), restart from step 2. Do not loop on it.
 
 ### A wrapper that retries once
 
@@ -394,7 +446,7 @@ def ask_for(person_id: str, question: str):
 
 ## 6. Revoke (sign out of your app)
 
-`POST /api/v1/oauth/revoke` (RFC 7009), form-encoded. Revoking a **refresh token** ends the whole grant; revoking an **access token** ends only that token. It answers 200 whether or not the token existed, and does nothing for another client's token.
+`POST /api/v1/oauth/revoke` (RFC 7009), form-encoded. Revoking a **refresh token** ends the whole grant; revoking an **access token** ends only that token. It answers 200 whether or not the token existed, and does nothing for another client's token. A confidential client authenticates the call like a token request (secret in the body or HTTP Basic).
 
 === "curl"
 
