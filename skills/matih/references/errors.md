@@ -12,10 +12,11 @@ Always read `detail.category` first, then `message`. `code` is optional. Failed 
 
 | Status | Category | Meaning | What to do |
 | --- | --- | --- | --- |
-| 401 | (none) | Missing, wrong, expired or revoked credential. Response has `WWW-Authenticate`. | API key: ask the user for a new key. OAuth: refresh once, then re-login. Do not loop. |
+| 401 | (none) | Missing, wrong, revoked or expired credential (keys do not expire by default). Response has `WWW-Authenticate`. | API key: ask the user for a new key. OAuth: refresh once, then re-login. Do not loop. |
 | 402 | `credits` | The workspace is out of credits. | Stop. Tell the user; an admin must add credits. Do not retry. |
 | 402 | `member_cap` | The workspace is at its member limit. | Tell the user an admin must raise the cap or free a seat. |
-| 403 | `scope` | The credential lacks the scope for this call. | Name the scope (see `auth.md`). Ask the user to issue a key or grant with that scope. |
+| 403 | `scope` | The credential lacks the scope for this call. | Name the scope (see `auth.md`). Ask the user to issue a key or grant with that scope. A key made without the matching product (for example Files) lacks its scopes. |
+| 403 | (none or `scope`) on a non-MCP path | An MCP connector key was used outside `/api/v1/mcp`. | Use an API key (`Settings > API & MCP`) for REST calls. |
 | 403 | `workspace_role` | The user's role in this workspace is too low for this action. | Tell the user which kind of role is needed (for example admin to add sources). Do not work around it. |
 | 403 | `source_access` | The user cannot access that source, or the `source_id` belongs to another workspace. | Re-run `list_sources` for the current workspace and pick again. Ask the user if no source is permitted. |
 | 409 | `busy` | Another request in the same conversation or the same long task is already running. | Wait 3 to 5 seconds and retry the same request with the same `Idempotency-Key`. Give up after about a minute and tell the user. |

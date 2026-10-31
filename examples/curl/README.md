@@ -3,7 +3,7 @@
 Copy-paste recipes for every endpoint of the public API. Needs `curl`, and `jq` for a few of the loops.
 
 ```bash
-export MATIH_API_KEY=mtk_...            # create under Settings, Integrations in Matih
+export MATIH_API_KEY=mtk_...            # create under `Settings > API & MCP` in Matih
 export BASE=https://workspace.matih.ai/api/v1
 AUTH="Authorization: Bearer $MATIH_API_KEY"
 ```
@@ -93,21 +93,21 @@ The config above is illustrative. Use the exact `type` and field names returned 
 ## Files (CSV and Excel upload)
 
 ```bash
-# Upload (sources:write). Optional form field on_duplicate: see /openapi.json for allowed values.
+# Upload (files:write). Optional form field on_duplicate: see /openapi.json for allowed values.
 curl -s -H "$AUTH" -F file=@sales.csv $BASE/files
 # -> {"id": "file_...", "status": "processing", ...}
 
-# List files (sources:read)
+# List files (files:read)
 curl -s -H "$AUTH" $BASE/files
 
 # One file: status, analysis state, decision_required
 curl -s -H "$AUTH" $BASE/files/FILE_ID
 
-# If decision_required is true, send the user's choice (sources:write)
+# If decision_required is true, send the user's choice (files:write)
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"decision": "DECISION"}' $BASE/files/FILE_ID/duplicate
 
-# Delete a file (sources:write). Destructive.
+# Delete a file (files:write). Destructive.
 curl -s -X DELETE -H "$AUTH" $BASE/files/FILE_ID
 
 # Poll in a loop

@@ -20,7 +20,7 @@ languages work as typed.
 1. Create a Slack app from [`manifest.yml`](manifest.yml) (Slack, Your Apps, Create New App, From
    a manifest). Install it, then copy the **Bot token** (`xoxb-`) and create an **App-level token**
    (`xapp-`) with the `connections:write` scope.
-2. In Matih, as a workspace admin, create an API key under **Settings, Integrations** with the
+2. In Matih, as a workspace admin, create an API key under **Settings > API & MCP** with the
    scopes `workspaces:read`, `sources:read`, `gems:read`, `ask`, `dashboards:read` and `predict`.
 3. Configure and run:
 

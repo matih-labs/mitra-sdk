@@ -16,7 +16,7 @@ OpenAPI 3.1 spec: `GET /openapi.json`, docs at `/docs`.
 - If Matih MCP tools are available in this session (names like `ask`, `list_sources`), use them. Images come back as MCP image content.
 - Otherwise use REST with `curl` or any HTTP client. Auth is `Authorization: Bearer $MATIH_API_KEY`. See `references/auth.md`.
 - Never invent endpoints or tool names. The tool list and endpoint list in this skill is complete.
-- The MCP tools are: `list_workspaces`, `use_workspace`, `list_members`, `invite_member`, `list_sources`, `source_status`, `list_gems`, `get_gem`, `generate_gems`, `ask`, `list_dashboards`, `dashboard_image`, `predict`, `get_job`, `list_files`. Everything else (cancelling jobs, creating or deleting sources, uploading files, role changes, webhooks) is REST only.
+- The MCP tools are: `list_workspaces`, `use_workspace`, `list_members`, `invite_member`, `list_sources`, `source_status`, `list_gems`, `get_gem`, `generate_gems`, `ask`, `list_dashboards`, `dashboard_image`, `predict`, `get_job`, `list_files`. Use an MCP connector key or an API key for MCP; a connector key returns 403 on any other path. Everything else (cancelling jobs, creating or deleting sources, uploading files, role changes, webhooks) is REST only.
 
 ## The default flow
 
@@ -81,7 +81,7 @@ More recipes: `examples/curl/README.md` in this repository.
 
 ## References
 
-- `references/auth.md`: API keys, OAuth, scopes, headers.
+- `references/auth.md`: API keys, MCP connector keys (created under `Settings > API & MCP`), OAuth, the 13 scopes, headers.
 - `references/workspaces.md`: listing and switching workspaces.
 - `references/asking.md`: clarification, empty and error handling, follow-ups, language and audio, streaming.
 - `references/gems.md`: Gems listing, generation, images.

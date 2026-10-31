@@ -17,7 +17,7 @@ npm install @matihlabs/mitra
 
 ## Authenticate
 
-Create an API key (`mtk_...`) under Settings, Integrations as a workspace admin. A key is pinned to one workspace and acts as the member who created it, never exceeding their role. OAuth 2.1 access tokens (`mto_...`, authorization code with PKCE) work too; pass them as `accessToken`.
+Create an API key (`mtk_...`) under `Settings > API & MCP` as a workspace admin. A key is pinned to one workspace and acts as the member who created it, never exceeding their role. OAuth 2.1 access tokens (`mto_...`, authorization code with PKCE) work too; pass them as `accessToken`.
 
 ```ts
 import { Mitra } from "@matihlabs/mitra";
@@ -27,7 +27,9 @@ const mitra = new Mitra({ apiKey: process.env.MITRA_API_KEY });
 
 If you pass nothing, the client reads `MITRA_API_KEY` or `MITRA_ACCESS_TOKEN` from the environment.
 
-Scopes: `workspaces:read`, `sources:read`, `sources:write`, `gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`, `members:read`, `members:manage`.
+Create keys under `Settings > API & MCP`; choose the products the key may use (all on by default) and revoke keys in the same screen. Keys never expire by default. Use an API key here, not an MCP connector key, which works only on `/api/v1/mcp`.
+
+Scopes: `workspaces:read`, `sources:read`, `sources:write`, `files:read`, `files:write`, `gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`, `members:read`, `members:manage`.
 
 Client options:
 
@@ -139,7 +141,7 @@ try {
 }
 ```
 
-Files:
+Files (`files:read` to list and get; `files:write` to upload, answer a duplicate prompt and delete):
 
 ```ts
 const file = await mitra.files.upload(await readFile("sales.csv"), {

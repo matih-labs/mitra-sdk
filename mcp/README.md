@@ -15,7 +15,10 @@ OAuth discovery documents, if your client asks for them:
 ## Which auth to use
 
 - OAuth: best for interactive clients. You sign in once in the browser and the client handles tokens. It uses your own Matih account and you pick the workspace with `use_workspace`.
-- API key: best for headless agents and CI. An admin creates the key in Matih under Settings, Integrations. The key is pinned to one workspace and acts as its creator, never exceeding that member's role.
+- MCP connector key: best for MCP clients that take a header or token, and for headless agents and CI. An admin creates it in Matih under `Settings > API & MCP`. A connector key works only on `/api/v1/mcp` and returns 403 elsewhere. It is pinned to one workspace and acts as its creator, never exceeding that member's role.
+- API key: also works on the MCP endpoint, and additionally on all of `/api/v1`. Prefer a connector key when the key is only for an MCP client.
+
+Admins choose the products a key may use (Ask, Data sources, Files, Predictive, Dashboards, Gems, Workspaces, Users & members, Webhooks; all on by default). Keys never expire by default; revoke them in the same screen.
 
 Keep keys in environment variables. Never commit them.
 
@@ -199,7 +202,7 @@ Replace the placeholder with your key from an environment variable or secret sto
 | `predict` | `question`; optional `source_id`, `conversation_id` | Starts a forecast, model or what-if. Returns a job, up to 30 minutes. |
 | `get_job` | `job_id` | Returns a job's `state`, `result` and `error`. |
 
-Argument names follow the REST API. Check the tool schema your client shows if a name differs. Scopes the tools use: `workspaces:read`, `members:read`, `members:manage`, `sources:read`, `ask`, `gems:read`, `gems:generate`, `dashboards:read`, `predict`.
+Argument names follow the REST API. Check the tool schema your client shows if a name differs. Scopes the tools use: `workspaces:read`, `members:read`, `members:manage`, `sources:read`, `files:read`, `ask`, `gems:read`, `gems:generate`, `dashboards:read`, `predict`.
 
 These are REST only: cancelling jobs, creating, testing, activating and deleting sources, uploading and deleting files, resolving duplicate files, changing roles, removing members, revoking invitations, voice questions (`/ask/audio`) and webhooks. See `../examples/curl/README.md`.
 
@@ -208,13 +211,16 @@ Admin tools such as `invite_member` change real access. Clients that auto-approv
 ## Troubleshooting
 
 401 Unauthorized
-: The key is wrong, revoked or expired, or the OAuth token expired. For an API key, create a new one and update your config. For OAuth, re-authenticate (in Claude Code run `/mcp` then Authenticate; in other clients remove and re-add the connector). Check there are no stray spaces or quotes in the header value, and that the header reads `Authorization: Bearer mtk_...`.
+: The key is wrong or revoked (keys do not expire by default), or the OAuth token expired. For an API key or connector key, create a new one and update your config. For OAuth, re-authenticate (in Claude Code run `/mcp` then Authenticate; in other clients remove and re-add the connector). Check there are no stray spaces or quotes in the header value, and that the header reads `Authorization: Bearer mtk_...`.
 
 Wrong workspace or "source not found"
 : OAuth sessions use your default workspace. Call `list_workspaces`, then `use_workspace`, then `list_sources` again; source ids differ per workspace. An API key is pinned to the workspace it was created in. To use another workspace, create a key there. A 403 with category `source_access` usually means a source id from a different workspace.
 
 403 scope
 : The credential lacks a scope for that tool (for example `predict` or `gems:generate`). Re-issue the key with the needed scope, or reconnect OAuth and approve the requested scopes.
+
+403 on a non-MCP path
+: A connector key works only on `/api/v1/mcp`. Use an API key for other `/api/v1` endpoints.
 
 403 workspace_role
 : Your role in that workspace is too low for the action. Ask a workspace admin.

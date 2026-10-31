@@ -22,7 +22,7 @@ MCP setup guide, an agent skill, and examples such as a Slack bot.
 
 ## Quickstart
 
-Create an API key as a workspace admin under **Settings, Integrations**, then:
+Create an API key as a workspace admin under `Settings > API & MCP`, then:
 
 ```bash
 export MATIH_API_KEY=mtk_...   # never commit this
@@ -73,10 +73,18 @@ OAuth 2.1 access token (`mto_...`, authorization code with PKCE and dynamic clie
 registration; discovery at `/.well-known/oauth-authorization-server`). OAuth tokens choose a
 workspace with the `X-Matih-Workspace` header or `PUT /me/workspace`.
 
+Workspace admins create keys in the Matih app under `Settings > API & MCP`. They choose the
+products the key may use (all on by default): Ask, Data sources, Files, Predictive, Dashboards,
+Gems, Workspaces, Users & members and Webhooks. Keys never expire by default; revoke them in the
+same screen. There are two kinds: an API key works on all of `/api/v1`, and an MCP connector key
+works only on `/api/v1/mcp` and returns 403 elsewhere. Use a connector key for MCP clients.
+
 ## Scopes
 
 `workspaces:read`, `members:read`, `members:manage`, `sources:read`, `sources:write`,
-`gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`.
+`files:read`, `files:write`, `gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`,
+`webhooks:manage`. File endpoints use `files:*` (`GET /files` and `GET /files/{id}` need
+`files:read`; upload, duplicate and delete need `files:write`).
 A key or token never exceeds the role of the member it acts as, whatever scopes it has.
 
 ## Links

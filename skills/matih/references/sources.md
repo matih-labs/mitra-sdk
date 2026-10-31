@@ -4,8 +4,10 @@ A source is a connected database, warehouse or uploaded file that questions run 
 
 ## Scopes
 
-- `sources:read`: list connectors, sources (with readiness) and files.
-- `sources:write`: test, create, activate and delete sources; upload files, resolve duplicates, delete files. Creating a source also needs the admin role.
+- `sources:read`: list connectors and sources (with readiness).
+- `sources:write`: test, create, activate and delete sources. Creating a source also needs the admin role.
+- `files:read`: `GET /files` and `GET /files/{id}`.
+- `files:write`: `POST /files` (upload), `POST /files/{id}/duplicate` and `DELETE /files/{id}`.
 
 ## Read
 
@@ -74,7 +76,7 @@ The valid `decision` values are in the OpenAPI spec or in the file's `decision_r
 
 ### Delete a file
 
-`DELETE /files/{id}` (`sources:write`). Confirm first; the file's data is removed.
+`DELETE /files/{id}` (`files:write`). Confirm first; the file's data is removed.
 
 ## After connecting
 

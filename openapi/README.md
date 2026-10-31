@@ -22,8 +22,10 @@ the API host.
 ## What the spec covers
 
 Endpoints are grouped by the OAuth scope they need: `workspaces:read`, `members:read`,
-`members:manage`, `sources:read`, `sources:write`, `gems:read`, `gems:generate`, `ask`,
-`dashboards:read`, `predict`, `webhooks:manage`. Admin endpoints (members, invitations, sources,
+`members:manage`, `sources:read`, `sources:write`, `files:read`, `files:write`, `gems:read`,
+`gems:generate`, `ask`, `dashboards:read`, `predict`, `webhooks:manage`. File endpoints use
+`files:*`: `GET /files` and `GET /files/{id}` need `files:read`; `POST /files`,
+`POST /files/{id}/duplicate` and `DELETE /files/{id}` need `files:write`. Admin endpoints (members, invitations, sources,
 files, webhooks) additionally require the matching workspace role. Errors use
 `{"detail": {"category", "message", "code?"}}`.
 
