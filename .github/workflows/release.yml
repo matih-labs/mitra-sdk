@@ -3,7 +3,8 @@ name: release
 # Publishing happens only when a tag is pushed. One tag releases all three packages, which
 # share a version:
 #   vX.Y.Z  -> PyPI  (trusted publishing, environment "pypi", no stored token)
-#           -> npm   @matihlabs/mitra and @matihlabs/embed (trusted publishing with provenance, no stored token)
+#           -> npm   @matihlabs/mitra and @matihlabs/embed (trusted publishing with provenance, no stored token),
+#              staged: each waits in the npm stage queue until a maintainer approves it with 2FA
 # Both trust this repository and this workflow file by name (release.yml), and PyPI also the
 # environment "pypi": renaming either breaks publishing until pypi.org / npmjs.com are updated.
 # npm can only trust a package that exists, so a new npm package is published once by hand
@@ -59,7 +60,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
       - name: Check the tag matches the package version
         run: |
@@ -73,11 +74,13 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # Tokenless trusted publishing needs npm 11.5.1 or later; Node 20 ships npm 10.
+      # npm stage publish needs npm 11.15.0 or later on Node 22.14 or later.
       - name: Upgrade npm
-        run: npm install -g npm@11.6.2 && npm --version
-      - name: Publish to npm (trusted publishing)
-        run: npm publish --provenance --access public
+        run: npm install -g npm@11.21.1 && npm --version
+      # The trusted publisher allows staging only: the version waits in the stage queue until a
+      # maintainer approves it with 2FA on npmjs.com (or `npm stage approve <stage-id>`).
+      - name: Stage on npm (trusted publishing)
+        run: npm stage publish --provenance --access public
 
   publish-embed:
     runs-on: ubuntu-latest
@@ -93,7 +96,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
       - name: Check the tag matches the package version
         run: |
@@ -106,8 +109,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # Tokenless trusted publishing needs npm 11.5.1 or later; Node 20 ships npm 10.
+      # npm stage publish needs npm 11.15.0 or later on Node 22.14 or later.
       - name: Upgrade npm
-        run: npm install -g npm@11.6.2 && npm --version
-      - name: Publish to npm (trusted publishing)
-        run: npm publish --provenance --access public
+        run: npm install -g npm@11.21.1 && npm --version
+      # The trusted publisher allows staging only: the version waits in the stage queue until a
+      # maintainer approves it with 2FA on npmjs.com (or `npm stage approve <stage-id>`).
+      - name: Stage on npm (trusted publishing)
+        run: npm stage publish --provenance --access public
