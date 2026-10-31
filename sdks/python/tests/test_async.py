@@ -15,7 +15,7 @@ async def test_async_ask(make_async_client):
 
 async def test_async_error(make_async_client):
     client = make_async_client(
-        lambda r: json_response({"detail": {"category": "busy", "message": "wait"}}, 409)
+        lambda r: json_response({"detail": {"category": "conflict", "message": "not open"}}, 409)
     )
     with pytest.raises(MitraError) as info:
         await client.ask("q")
