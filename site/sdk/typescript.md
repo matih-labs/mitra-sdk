@@ -21,7 +21,7 @@ Source and tests: [`sdks/typescript`](https://github.com/matih-labs/mitra-sdk/tr
 ```ts
 import { Mitra } from "@matihlabs/mitra";
 
-const mitra = new Mitra({ apiKey: process.env.MITRA_API_KEY });
+const mitra = new Mitra({ apiKey: process.env.MATIH_API_KEY });
 
 const answer = await mitra.ask("How many orders did we get today?");
 console.log(answer.answer);
@@ -36,9 +36,9 @@ console.log(answer.answer);
 
 | Option | Default | Meaning |
 |---|---|---|
-| `apiKey` | `process.env.MITRA_API_KEY` | API key (`mtk_...`), pinned to one workspace |
-| `accessToken` | `process.env.MITRA_ACCESS_TOKEN` | OAuth access token (`mto_...`). Pass one of `apiKey` or `accessToken`, not both |
-| `baseUrl` | `https://workspace.matih.ai/api/v1` | Include the `/api/v1` prefix. Trailing slashes are removed |
+| `apiKey` | `process.env.MATIH_API_KEY` | API key (`mtk_...`), pinned to one workspace |
+| `accessToken` | `process.env.MATIH_ACCESS_TOKEN` | OAuth access token (`mto_...`). Pass one of `apiKey` or `accessToken`, not both |
+| `baseUrl` | `process.env.MATIH_BASE_URL`, else `https://workspace.matih.ai` | The host only: the SDK adds `/api/v1`. Trailing slashes are removed |
 | `workspaceId` | none | Default `X-Matih-Workspace` (OAuth tokens; an API key is pinned) |
 | `language` | none | Default `Accept-Language` for response text, for example `hi-IN`. See [Languages](../concepts/languages.md) |
 | `fetch` | global `fetch` | Custom implementation, for tests or proxies |
@@ -49,7 +49,7 @@ console.log(answer.answer);
 The constructor throws a `TypeError` when no credential is found, when both `apiKey` and `accessToken` are passed, or when there is no `fetch`.
 
 !!! note "Environment variable names"
-    The TypeScript client reads `MITRA_API_KEY` and `MITRA_ACCESS_TOKEN`. The Python client reads `MATIH_API_KEY`. Pass `apiKey` explicitly if you want one name across both.
+    Both SDKs read the same variables: `MATIH_API_KEY`, `MATIH_ACCESS_TOKEN` and `MATIH_BASE_URL` (the host only, never with `/api/v1`).
 
 OAuth example (an app acting for one user):
 
@@ -455,7 +455,7 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 
 const dispatcher = new ProxyAgent("http://proxy.internal:3128");
 const mitra = new Mitra({
-  apiKey: process.env.MITRA_API_KEY,
+  apiKey: process.env.MATIH_API_KEY,
   fetch: ((url, init) => undiciFetch(url as string, { ...(init as object), dispatcher })) as typeof fetch,
 });
 ```

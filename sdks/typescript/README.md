@@ -9,7 +9,7 @@ TypeScript client for the Mitra public API. Ask questions of your data in any of
 - Server-sent-event streaming for answers
 - Webhook signature verification (constant-time)
 
-API base URL: `https://workspace.matih.ai/api/v1`. The OpenAPI 3.1 spec is served at `/openapi.json`.
+API base URL: `https://workspace.matih.ai/api/v1`. The OpenAPI 3.1 spec is served at `/api/v1/openapi.json`.
 
 ## Install
 
@@ -24,10 +24,10 @@ Create an API key (`mtk_...`) under `Settings › API & MCP` as a workspace admi
 ```ts
 import { Mitra } from "@matihlabs/mitra";
 
-const mitra = new Mitra({ apiKey: process.env.MITRA_API_KEY });
+const mitra = new Mitra({ apiKey: process.env.MATIH_API_KEY });
 ```
 
-If you pass nothing, the client reads `MITRA_API_KEY` or `MITRA_ACCESS_TOKEN` from the environment.
+If you pass nothing, the client reads `MATIH_API_KEY` or `MATIH_ACCESS_TOKEN` from the environment (and `MATIH_BASE_URL`, the host only, if you need another server).
 
 Create keys under `Settings › API & MCP`; choose the products the key may use (all on by default) and revoke keys in the same screen. Keys never expire by default. Use an API key here, not an MCP connector key, which works only on `/api/v1/mcp`.
 
@@ -38,7 +38,7 @@ Client options:
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `apiKey` / `accessToken` | env | Credential; pass one. |
-| `baseUrl` | `https://workspace.matih.ai/api/v1` | Include the version prefix. |
+| `baseUrl` | `$MATIH_BASE_URL`, else `https://workspace.matih.ai` | The host only: the SDK adds `/api/v1`. |
 | `workspaceId` | none | Default `X-Matih-Workspace` (OAuth tokens). |
 | `language` | none | Default `Accept-Language`, e.g. `hi-IN`. |
 | `fetch` | global `fetch` | Custom implementation. |
@@ -199,7 +199,7 @@ import { verifyWebhook } from "@matihlabs/mitra";
 
 app.post("/hooks/mitra", express.raw({ type: "application/json" }), (req, res) => {
   const ok = verifyWebhook(
-    process.env.MITRA_WEBHOOK_SECRET!,
+    process.env.MATIH_WEBHOOK_SECRET!,
     req.header("Matih-Signature"),
     req.body, // Buffer
     300,      // tolerance in seconds (default 300)

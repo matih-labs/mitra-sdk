@@ -6,7 +6,7 @@ Python client for the Matih public API. Sync (`Mitra`) and async (`AsyncMitra`) 
 [httpx](https://www.python-httpx.org/), pydantic v2 models for the main response shapes, SSE
 streaming, background-job polling and webhook signature verification.
 
-> Pre-release: the package is not on PyPI until `/api/v1` is live. Install from a checkout with
+> Pre-release (0.1.0): the package is not on PyPI until `/api/v1` is live for every workspace. Install from a checkout with
 > `pip install -e sdks/python`.
 
 ```bash
@@ -103,7 +103,7 @@ except SourceTestFailedError as e:                        # HTTP 422
 client.sources.activate("src_1"); client.sources.delete("src_1")
 
 # files: files:read to list and get; files:write to upload, answer a duplicate prompt and delete
-f = client.files.upload("sales.csv", on_duplicate="replace")   # CSV or Excel
+f = client.files.upload("sales.csv", on_duplicate="keep_both")   # CSV or Excel
 client.files.get(f.id)          # status, analysis state, decision_required
 client.files.duplicate(f.id, "keep_both")                 # answer a duplicate prompt
 client.files.list(); client.files.delete(f.id)
@@ -115,7 +115,7 @@ Needs `members:read` / `members:manage`; only do these when a person asked for t
 
 ```python
 client.members.list()
-client.invitations.create("member", email="new@example.com")   # or phone="+91..."
+client.invitations.create("user", email="new@example.com")   # or phone="+91..."
 client.invitations.list(); client.invitations.revoke("inv_1")
 client.members.update("mem_1", "admin"); client.members.remove("mem_1")
 ```

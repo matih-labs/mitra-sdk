@@ -5,9 +5,10 @@
 Client-side tools for the Matih public API: the OpenAPI spec, Python and TypeScript SDKs, an
 MCP setup guide, an agent skill, and examples such as a Slack bot.
 
-> **Status: pre-release.** The versioned API (`/api/v1`) is being rolled out. Until v1 is live
-> the SDKs here are not published to PyPI or npm and the examples will not work against
-> production. Watch releases for the first published spec and package versions.
+> **Status: pre-release, version 0.1.0.** The versioned API (`/api/v1`) is rolling out to
+> `workspace.matih.ai` now and is not live for every workspace yet. Until it is, the SDKs here
+> are not published to PyPI or npm and the examples may be refused by your workspace. Watch
+> releases for the first published spec and package versions.
 
 ## What the API lets you do
 
@@ -97,7 +98,7 @@ Workspace admins create keys in the Matih app under `Settings › API & MCP`. Th
 products the key may use (all on by default): Ask, Data sources, Files, Predictive, Dashboards,
 Gems, Workspaces, Users & members and Webhooks. Keys never expire by default; revoke them in the
 same screen. There are two kinds: an API key works on all of `/api/v1`, and an MCP connector key
-works only on `/api/v1/mcp` and returns 403 elsewhere. Use a connector key for MCP clients.
+works only on `/api/v1/mcp` and is refused with 401 elsewhere. Use a connector key for MCP clients.
 
 ## Scopes
 

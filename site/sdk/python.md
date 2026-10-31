@@ -51,15 +51,15 @@ Source and tests: [`sdks/python`](https://github.com/matih-labs/mitra-sdk/tree/m
 | Option | Default | Meaning |
 |---|---|---|
 | `api_key` | `$MATIH_API_KEY` | Workspace API key (`mtk_...`). Pinned to one workspace. |
-| `access_token` | none | OAuth access token (`mto_...`). Use instead of `api_key`. Passing both raises `ValueError`. |
-| `base_url` | `$MATIH_BASE_URL`, else `https://workspace.matih.ai/api/v1` | Include the `/api/v1` prefix. A trailing slash is removed. |
+| `access_token` | `$MATIH_ACCESS_TOKEN` | OAuth access token (`mto_...`). Use instead of `api_key`. Passing both raises `ValueError`. |
+| `base_url` | `$MATIH_BASE_URL`, else `https://workspace.matih.ai` | The host only: the SDK adds `/api/v1`. A trailing slash is removed. |
 | `workspace_id` | none | Default `X-Matih-Workspace` header. Used by OAuth tokens; an API key is pinned and a different workspace is refused. |
 | `language` | none | Default `Accept-Language`, for example `hi-IN`. See [Languages](../concepts/languages.md). |
 | `timeout` | `60.0` | Per-request timeout in seconds. Streaming has no read timeout. |
 | `max_retries` | `2` | Retries per call, see [Retries](#retries-and-idempotency). |
 | `http_client` | a new client | Your own `httpx.Client` (`httpx.AsyncClient` for `AsyncMitra`). |
 
-If no credential is given and `MATIH_API_KEY` is unset, the constructor raises `ValueError`.
+If no credential is given and neither `MATIH_API_KEY` nor `MATIH_ACCESS_TOKEN` is set, the constructor raises `ValueError`.
 
 OAuth example (an app acting for one user):
 

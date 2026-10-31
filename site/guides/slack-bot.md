@@ -52,7 +52,7 @@ SLACK_APP_TOKEN=xapp-...
 MATIH_API_KEY=mtk_...
 # optional
 # MATIH_ACCESS_TOKEN=mto_...      # instead of the key, to allow switching workspaces
-# MATIH_BASE_URL=https://workspace.matih.ai/api/v1
+# MATIH_BASE_URL=https://workspace.matih.ai   # host only
 # MATIH_BOT_DB=matih_bot.sqlite3
 ```
 
