@@ -17,7 +17,7 @@ So a single-workspace integration, such as a company Slack bot, should use an AP
 
 ## List the workspaces the person can reach
 
-The response has `current` (the id of the current workspace) and `workspaces`, each with `id`, `name`, `role` and `kind`.
+The response has `current` (the id of the current workspace), `workspaces`, each with `id`, `name`, `role` and `kind`, and, for a signed-in person, any open `invitations` addressed to them (`id`, `workspace_name`, `role`, `invited_by`, `expires_at`).
 
 === "curl"
 
@@ -79,7 +79,7 @@ The response has `current` (the id of the current workspace) and `workspaces`, e
 
 ## Change the default workspace
 
-`PUT /me/workspace` changes the person's current workspace on the server. Every later request with that token, from any client, runs there until it is changed again.
+`PUT /me/workspace` changes the person's current workspace on the server and answers `{current, name}`. Every later request with that token that carries no `X-Matih-Workspace` runs there until it is changed again.
 
 === "curl"
 
@@ -93,7 +93,7 @@ The response has `current` (the id of the current workspace) and `workspaces`, e
 === "Python"
 
     ```python
-    client.workspaces.use("WORKSPACE_ID")
+    client.workspaces.use("WORKSPACE_ID")   # the Python client does not adopt it; pass workspace_id= per client or call
     ```
 
 === "TypeScript"
@@ -150,7 +150,7 @@ A server handling many people should not flip a global default: two requests in 
     });
     ```
 
-A workspace the person does not belong to is refused, and the role they hold in that workspace decides what the request may do, exactly as in the app.
+A workspace the person does not belong to is refused (and an API key naming a workspace other than its own gets `403` with category `workspace`), and the role they hold in that workspace decides what the request may do, exactly as in the app.
 
 ## A workspace picker for a chat bot
 
