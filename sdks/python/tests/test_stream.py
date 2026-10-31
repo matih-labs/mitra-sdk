@@ -32,11 +32,11 @@ def test_ask_stream_yields_events(make_client):
 
 def test_ask_stream_error_status_raises(make_client):
     client = make_client(
-        lambda r: httpx.Response(402, json={"detail": {"category": "credits", "message": "out"}})
+        lambda r: httpx.Response(402, json={"detail": {"category": "not_ready", "message": "out"}})
     )
     with pytest.raises(MitraError) as info:
         list(client.ask_stream("q"))
-    assert info.value.category == "credits"
+    assert info.value.category == "not_ready"
 
 
 async def test_async_ask_stream(make_async_client):

@@ -3,25 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from conftest import ANSWER, job, json_response
+from conftest import ANSWER, file_payload, job, r, seq, source_created
 
 from mitra import Job, JobFailedError, JobTimeoutError
-
-
-def seq(*responses):
-    """Handler that answers with the given responses in order, repeating the last."""
-    calls: list = []
-
-    def handler(request):
-        calls.append(request)
-        return responses[min(len(calls) - 1, len(responses) - 1)]()
-
-    handler.calls = calls
-    return handler
-
-
-def r(payload, status=200, headers=None):
-    return lambda: json_response(payload, status, headers)
 
 
 @pytest.fixture(autouse=True)
@@ -67,11 +51,11 @@ def test_predictions_create_waits_by_default(make_client):
     handler = seq(
         r(job("running"), 202),
         r(job("running")),
-        r(job("succeeded", result={"answer": "up 4%", "attachments": []})),
+        r(job("succeeded", result={"conversation_id": "c1", "answer": {"status": "answered", "answer": "up 4%"}})),
     )
     done = make_client(handler).predictions.create("next quarter?", wait=600)
     assert handler.calls[0].headers["prefer"] == "wait=60"  # capped at what the server honours
-    assert done.result["answer"] == "up 4%"
+    assert done.result["answer"]["answer"] == "up 4%"
     assert handler.calls[1].url.path.endswith("/jobs/j1")
 
 
@@ -114,31 +98,74 @@ def test_dashboard_image_modes(make_client):
     assert bg.state == "queued"
 
 
-def test_sources_create_waits_up_to_120(make_client):
-    handler = seq(r({"id": "s1", "name": "Sales"}, 201))
-    out = make_client(handler).sources.create({"type": "postgres"}, wait=300)
-    assert handler.calls[0].headers["prefer"] == "wait=120"
-    assert out["id"] == "s1"
+def test_sources_create_ready_in_first_response_makes_one_call(make_client):
+    handler = seq(r(source_created("ready"), 201, {"Preference-Applied": "wait=120"}))
+    out = make_client(handler).sources.create({"connector_type": "postgres"}, wait=300)
+    assert handler.calls[0].headers["prefer"] == "wait=120"  # the server honours up to 120
+    assert out.source.readiness.can_ask is True
+    assert len(handler.calls) == 1
 
 
-def test_sources_create_background_202_returns_job(make_client):
-    handler = seq(r(job("queued", kind="source"), 202))
-    out = make_client(handler).sources.create({"type": "postgres"}, background=True)
-    assert isinstance(out, Job) and out.state == "queued"
+def test_sources_create_polls_the_source_until_can_ask(make_client):
+    """A 201 with phase building is not a Job: poll GET /sources/{id}, never /jobs."""
+    handler = seq(
+        r(source_created("building"), 201),
+        r(source_created("building")["source"]),
+        r(source_created("ready")["source"]),
+    )
+    out = make_client(handler).sources.create({"connector_type": "postgres"})
+    assert [c.method for c in handler.calls] == ["POST", "GET", "GET"]
+    assert all(c.url.path.endswith(("/sources", "/sources/s1")) for c in handler.calls)
+    assert out.source.readiness.can_ask is True
+    assert out.test.ok is True
+
+
+def test_sources_create_background_returns_saved_source_without_polling(make_client):
+    handler = seq(r(source_created("building"), 201))
+    out = make_client(handler).sources.create({"connector_type": "postgres"}, background=True)
     assert "prefer" not in handler.calls[0].headers
+    assert out.source.readiness.phase == "building" and len(handler.calls) == 1
 
 
-def test_files_upload_waits_on_202(make_client):
-    handler = seq(r(job("queued", kind="file"), 202), r(job("succeeded", kind="file")))
+def test_sources_create_gives_back_the_source_as_it_stands_on_timeout(make_client):
+    handler = seq(r(source_created("building"), 201))
+    out = make_client(handler).sources.create({"connector_type": "postgres"}, wait=0)
+    assert out.source.readiness.phase == "building"  # no exception
+
+
+def test_files_upload_waits_up_to_120_and_returns_ready_file(make_client):
+    handler = seq(r(file_payload("ready"), 201, {"Preference-Applied": "wait=120"}))
+    out = make_client(handler).files.upload(b"a,b\n", filename="x.csv", wait=300)
+    assert handler.calls[0].headers["prefer"] == "wait=120"
+    assert out.id == "f1" and out.ready is True
+
+
+def test_files_upload_202_is_a_file_and_is_polled_via_files_get(make_client):
+    handler = seq(
+        r(file_payload("processing"), 202),
+        r(file_payload("processing")),
+        r(file_payload("ready")),
+    )
     out = make_client(handler).files.upload(b"a,b\n", filename="x.csv", wait=20)
     assert handler.calls[0].headers["prefer"] == "wait=20"
-    assert out.state == "succeeded"
+    assert [c.url.path.rsplit("/api/v1", 1)[1] for c in handler.calls] == [
+        "/files", "/files/f1", "/files/f1"]
+    assert out.ready is True
 
 
-def test_files_upload_returns_file_when_processed(make_client):
-    handler = seq(r({"id": "f1", "status": "ready"}, 201))
+def test_files_upload_stops_polling_at_a_duplicate_decision(make_client):
+    dup = file_payload("needs_attention", decision_required="duplicate",
+                       decision_options=["use_existing", "keep_both", "cancel"])
+    handler = seq(r(dup, 201))
     out = make_client(handler).files.upload(b"a,b\n", filename="x.csv")
-    assert out.id == "f1"
+    assert out.decision_required == "duplicate" and len(handler.calls) == 1
+
+
+def test_files_upload_background_does_not_poll_or_send_prefer(make_client):
+    handler = seq(r(file_payload("processing"), 201))
+    out = make_client(handler).files.upload(b"a,b\n", filename="x.csv", background=True)
+    assert out.status == "processing" and len(handler.calls) == 1
+    assert "prefer" not in handler.calls[0].headers
 
 
 # --------------------------------------------------------------- async client
@@ -187,10 +214,16 @@ async def test_async_failed_and_timeout(make_async_client):
         await make_async_client(seq(r(job("running"), 202))).predictions.create("q", wait=0)
 
 
-async def test_async_sources_and_files(make_async_client):
-    src = seq(r({"id": "s1"}, 201))
-    assert (await make_async_client(src).sources.create({"type": "postgres"}))["id"] == "s1"
-    assert src.calls[0].headers["prefer"] == "wait=120" or src.calls[0].headers["prefer"].startswith("wait=")
-    up = seq(r(job("queued", kind="file"), 202), r(job("succeeded", kind="file")))
-    out = await make_async_client(up).files.upload(b"a\n", filename="x.csv", wait=10)
-    assert out.state == "succeeded"
+async def test_async_sources_create_polls_source(make_async_client):
+    handler = seq(r(source_created("building"), 201), r(source_created("ready")["source"]))
+    out = await make_async_client(handler).sources.create({"connector_type": "postgres"})
+    assert handler.calls[0].headers["prefer"] == "wait=120"
+    assert handler.calls[1].url.path.endswith("/sources/s1")
+    assert out.source.readiness.can_ask is True
+
+
+async def test_async_files_upload_polls_file(make_async_client):
+    handler = seq(r(file_payload("processing"), 202), r(file_payload("ready")))
+    out = await make_async_client(handler).files.upload(b"a\n", filename="x.csv", wait=10)
+    assert handler.calls[1].url.path.endswith("/files/f1")
+    assert out.ready is True

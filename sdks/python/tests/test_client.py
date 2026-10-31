@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from conftest import ANSWER, body_of, json_response
+from conftest import ANSWER, body_of, file_payload, json_response
 
-from mitra import AuthError, MitraError, Mitra, RateLimitError
+from mitra import AuthError, Mitra, MitraError, RateLimitError
 
 
 def test_ask_sends_auth_language_workspace_and_idempotency(make_client):
@@ -34,8 +34,42 @@ def test_ask_sends_auth_language_workspace_and_idempotency(make_client):
 
 def test_requires_a_credential(monkeypatch):
     monkeypatch.delenv("MATIH_API_KEY", raising=False)
+    monkeypatch.delenv("MATIH_ACCESS_TOKEN", raising=False)
     with pytest.raises(ValueError):
         Mitra()
+
+
+def test_reads_matih_api_key_and_host_only_matih_base_url(monkeypatch):
+    monkeypatch.setenv("MATIH_API_KEY", "mtk_env")
+    monkeypatch.setenv("MATIH_BASE_URL", "https://example.test")
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers["authorization"]
+        return json_response({"current": "w1", "workspaces": []})
+
+    Mitra(http_client=httpx.Client(transport=httpx.MockTransport(handler))).workspaces.list()
+    assert seen["url"] == "https://example.test/api/v1/workspaces"
+    assert seen["auth"] == "Bearer mtk_env"
+
+
+def test_base_url_defaults_to_the_host_and_appends_api_v1(monkeypatch):
+    monkeypatch.delenv("MATIH_BASE_URL", raising=False)
+    assert Mitra("mtk_x").settings.base_url == "https://workspace.matih.ai/api/v1"
+    assert Mitra("mtk_x", base_url="https://h.test/").settings.base_url == "https://h.test/api/v1"
+
+
+def test_base_url_that_already_ends_in_api_v1_is_not_doubled(monkeypatch):
+    monkeypatch.delenv("MATIH_BASE_URL", raising=False)
+    client = Mitra("mtk_x", base_url="https://h.test/api/v1")
+    assert client.settings.base_url == "https://h.test/api/v1"
+
+
+def test_oauth_access_token_from_environment(monkeypatch):
+    monkeypatch.delenv("MATIH_API_KEY", raising=False)
+    monkeypatch.setenv("MATIH_ACCESS_TOKEN", "mto_env")
+    assert Mitra().settings.credential == "mto_env"
 
 
 def test_error_parsing_and_request_id(make_client):
@@ -126,7 +160,7 @@ def test_files_upload_is_multipart(make_client):
     def handler(request):
         seen["ct"] = request.headers["content-type"]
         seen["body"] = request.content
-        return json_response({"id": "f1", "status": "processing"})
+        return json_response(file_payload("ready"), 201)
 
     client = make_client(handler)
     file = client.files.upload(b"a,b\n1,2\n", filename="sales.csv", content_type="text/csv")

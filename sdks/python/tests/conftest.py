@@ -59,3 +59,44 @@ ANSWER = {
 def job(state: str, **extra) -> dict:
     return {"id": "j1", "kind": "prediction", "state": state, "result": None, "error": None,
             "created_at": "2026-10-31T00:00:00Z", "updated_at": "2026-10-31T00:00:01Z", **extra}
+
+
+def seq(*responses):
+    """Handler that answers with the given responses in order, repeating the last."""
+    calls: list = []
+
+    def handler(request):
+        calls.append(request)
+        return responses[min(len(calls) - 1, len(responses) - 1)]()
+
+    handler.calls = calls
+    return handler
+
+
+def r(payload, status=200, headers=None):
+    return lambda: json_response(payload, status, headers)
+
+
+def source(phase: str = "ready", **extra) -> dict:
+    """A Source as the server returns it; ``phase`` is ready, building or not_connected."""
+    can_ask = phase == "ready"
+    return {
+        "id": "s1", "name": "Orders DB", "connector_type": "postgres", "settings": {},
+        "secret_fields_set": ["password"], "state": "connected", "is_active": True,
+        "is_sample": False, "created_at": "2026-10-31T00:00:00Z",
+        "updated_at": "2026-10-31T00:00:01Z",
+        "readiness": {"source_id": "s1", "state": "connected", "phase": phase,
+                      "can_ask": can_ask, "message": "x"},
+        **extra,
+    }
+
+
+def source_created(phase: str = "ready") -> dict:
+    return {"source": source(phase), "test": {"ok": True, "connector_type": "postgres",
+            "duration_ms": 12, "message": "ok"}, "applied": True, "catalog_job_id": "cj1"}
+
+
+def file_payload(status: str, **extra) -> dict:
+    return {"id": "f1", "name": "sales.csv", "format": "csv", "size_bytes": 10, "status": status,
+            "ready": status == "ready", "decision_options": [], "tables": [],
+            "created_at": "2026-10-31T00:00:00Z", "updated_at": "2026-10-31T00:00:01Z", **extra}

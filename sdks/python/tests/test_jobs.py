@@ -24,12 +24,12 @@ def test_wait_polls_until_succeeded(make_client, monkeypatch):
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
     handler = sequence(["queued", "running", "running", "succeeded"],
-                       {"result": {"answer": "ok", "attachments": []}})
+                       {"result": {"conversation_id": "c1", "answer": {"status": "answered", "answer": "ok"}}})
     client = make_client(handler)
     seen = []
     done = client.jobs.wait("j1", on_update=lambda j: seen.append(j.state))
     assert done.state == "succeeded"
-    assert done.result["answer"] == "ok"
+    assert done.result["answer"]["answer"] == "ok"
     assert handler.calls["n"] == 4
     assert seen[0] == "queued" and seen[-1] == "succeeded"
     assert sleeps == sorted(sleeps) and sleeps[0] == 1.0 and sleeps[1] == 1.5
@@ -64,11 +64,11 @@ def test_prediction_run_creates_and_waits(make_client, monkeypatch):
         if request.method == "POST":
             return json_response(job("queued"), 202)
         state["polls"] += 1
-        return json_response(job("succeeded", result={"answer": "up 4%", "attachments": []}))
+        return json_response(job("succeeded", result={"conversation_id": "c1", "answer": {"status": "answered", "answer": "up 4%"}}))
 
     client = make_client(handler)
     finished = client.predictions.run("forecast sales", source_id="s1")
-    assert finished.result["answer"] == "up 4%"
+    assert finished.result["answer"]["answer"] == "up 4%"
 
 
 def test_cancel(make_client):
