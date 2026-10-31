@@ -42,7 +42,7 @@ jobs:
       # actions/setup-python is pinned in the sibling repository, so uv provides Python and
       # installs the pinned requirements into a throwaway environment.
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-      - name: Build the site (strict: a broken link fails the build)
+      - name: "Build the site (strict, so a broken link fails the build)"
         run: |
           uv venv "$RUNNER_TEMP/docs-venv"
           uv pip install --python "$RUNNER_TEMP/docs-venv/bin/python" -r site/requirements.txt
