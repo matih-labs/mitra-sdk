@@ -28,7 +28,7 @@ from .models import (
     Workspace,
     WorkspaceList,
 )
-from .webhooks import verify_webhook
+from .webhooks import assert_webhook, verify_webhook
 
 __all__ = [
     "Answer",
@@ -56,5 +56,6 @@ __all__ = [
     "Workspace",
     "WorkspaceList",
     "__version__",
+    "assert_webhook",
     "verify_webhook",
 ]

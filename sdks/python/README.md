@@ -102,11 +102,10 @@ hook = client.webhooks.create("https://example.com/hooks/matih", ["prediction.co
 print(hook.secret)   # shown once
 
 # In your web handler, with the RAW request body:
-from mitra import verify_webhook, WebhookVerificationError
-try:
-    verify_webhook(secret, request.headers["Matih-Signature"], raw_body)  # constant-time
-except WebhookVerificationError:
+from mitra import verify_webhook
+if not verify_webhook(secret, request.headers["Matih-Signature"], raw_body):  # constant-time
     return 400
+# assert_webhook(...) is the same check but raises WebhookVerificationError with the reason.
 ```
 
 ## Async

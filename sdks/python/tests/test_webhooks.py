@@ -5,7 +5,7 @@ import hmac
 
 import pytest
 
-from mitra import WebhookVerificationError, verify_webhook
+from mitra import WebhookVerificationError, assert_webhook, verify_webhook
 
 SECRET = "whsec_test"
 BODY = b'{"event":"job.completed","job_id":"j1"}'
@@ -25,24 +25,24 @@ def test_str_body_accepted():
 
 
 def test_wrong_secret():
+    assert verify_webhook("other", sign(BODY, 1_000), BODY, now=1_000) is False
     with pytest.raises(WebhookVerificationError):
-        verify_webhook("other", sign(BODY, 1_000), BODY, now=1_000)
+        assert_webhook("other", sign(BODY, 1_000), BODY, now=1_000)
 
 
 def test_tampered_body():
-    with pytest.raises(WebhookVerificationError):
-        verify_webhook(SECRET, sign(BODY, 1_000), BODY + b" ", now=1_000)
+    assert not verify_webhook(SECRET, sign(BODY, 1_000), BODY + b" ", now=1_000)
 
 
 def test_stale_timestamp():
-    with pytest.raises(WebhookVerificationError):
-        verify_webhook(SECRET, sign(BODY, 1_000), BODY, tolerance_sec=300, now=1_400)
+    assert not verify_webhook(SECRET, sign(BODY, 1_000), BODY, tolerance_sec=300, now=1_400)
 
 
 def test_missing_or_malformed_header():
     for header in (None, "", "garbage", "t=abc,v1=00", "v1=00"):
+        assert verify_webhook(SECRET, header, BODY, now=1_000) is False
         with pytest.raises(WebhookVerificationError):
-            verify_webhook(SECRET, header, BODY, now=1_000)
+            assert_webhook(SECRET, header, BODY, now=1_000)
 
 
 def test_multiple_v1_signatures_any_match():
