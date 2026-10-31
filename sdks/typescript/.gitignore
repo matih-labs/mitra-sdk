@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+# Generated from ../../openapi/openapi.json by `npm run generate` (CI); never hand-edited.
+src/schema.d.ts
