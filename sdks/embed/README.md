@@ -77,10 +77,10 @@ el.getToken = async ({ embed }) => {
 | `token` | The `met_...` token from the same mint, used for the first load. Optional when a provider is set. |
 | `token-endpoint` | A URL on your site. The element `POST`s `application/json` to it (`{}` first, then `{"embed":"emt_..."}` on refresh, cookies sent same-origin) and expects `{"token": "met_...", "src": "..."}`. `src` is only read when the `src` attribute is not set. |
 | `getToken` (property) | `(request: {embed?: string}) => string | {token, src?} | Promise<...>`. Takes precedence over `token-endpoint`. |
-| `height` | A number (pixels) or a length in `px`, `vh`, `rem`, `em`, `%`. Default `640px`. |
+| `height` | The initial height, and the fallback: a number (pixels) or a length in `px`, `vh`, `rem`, `em`, `%`. Default `640px`. Once the embed page reports its content height (`matih:resize`) the frame follows it. |
 | `title` | Accessible title of the frame. Default `Matih embed`. |
 
-The element does not resize itself: the embed contract defines no height message, so set `height`.
+The frame resizes itself: the embed page posts `{type:"matih:resize", height}` (pixels) and the element applies it, rounded up and capped at 20,000 px. It only listens to its own frame at its own origin. Setting `height` again puts the frame back to that value until the next resize.
 
 A `token` attribute is used once. When the element is moved in the DOM or `src` changes, and a provider exists, it asks the provider for a fresh token instead of reusing the old one (tokens are never renewable and may have expired).
 
@@ -101,7 +101,7 @@ el.addEventListener("matih:error", (e) => console.warn(e.detail.code));
 
 - **Token only in the fragment.** `src` is a mint URL without its token; any `#...` in it is dropped.
 - **Origin pinned, never `"*"`.** It answers `matih:token-expiring` only when `event.source` is the element's own iframe window **and** `event.origin` equals the origin of `src`. The reply goes to that exact origin. Anything else (other frames, extensions, the page itself) is ignored.
-- **Bounded messages.** Unknown message types are ignored; error codes are length-capped and a frame cannot put its own text into `message`.
+- **Bounded messages.** Unknown message types are ignored; a resize must be a positive finite number; error codes are length-capped and a frame cannot put its own text into `message`.
 - **One refresh at a time.** A burst of `matih:token-expiring` shares one call to your backend.
 - **A removed or reloaded frame gets nothing.** If the frame changed while your backend was minting, the new token is dropped.
 - **Mint on your backend only.** The element never holds an API key and never calls `POST /api/v1/embeds` itself.

@@ -7,6 +7,7 @@
  *   iframe -> parent      {type:"matih:token-expiring", embed:"emt_..."}
  *   parent -> iframe      {type:"matih:token", token:"met_..."}   posted to the frame's exact origin
  *   iframe -> parent      {type:"matih:ready"} and {type:"matih:error", code}   (optional)
+ *   iframe -> parent      {type:"matih:resize", height:<px>}   the frame's content height
  *
  * No runtime dependencies, no build-time globals: importing this module on a server (no
  * `HTMLElement`) does nothing, and in a browser it registers `<matih-embed>`.
@@ -39,6 +40,8 @@ export const SANDBOX = "allow-scripts allow-same-origin";
 export const TOKEN_TIMEOUT_MS = 15_000;
 
 const DEFAULT_HEIGHT = "640px";
+/** A frame cannot ask for more than this: a bad or hostile height must not make the page unusable. */
+const MAX_FRAME_HEIGHT_PX = 20_000;
 
 const HostBase: typeof HTMLElement =
   typeof HTMLElement === "undefined" ? (class {} as unknown as typeof HTMLElement) : HTMLElement;
@@ -122,6 +125,8 @@ export class MatihEmbed extends HostBase {
   private scheduled = false;
   private connected = false;
   private attrTokenUsed = false;
+  /** Height the embed page asked for with `matih:resize`; null until it does. */
+  private resizedPx: number | null = null;
   private refreshing: Promise<void> | null = null;
   private done: Promise<void> = Promise.resolve();
   private readonly onMessage = (event: Event): void => this.handleMessage(event as MessageEvent);
@@ -184,6 +189,8 @@ export class MatihEmbed extends HostBase {
     if (oldValue === newValue) return;
     if (name === "token") this.attrTokenUsed = false;
     if (name === "height" || name === "title") {
+      // The author changing `height` wins over what the frame last asked for.
+      if (name === "height") this.resizedPx = null;
       this.applyFrameAttributes();
       return;
     }
@@ -282,12 +289,14 @@ export class MatihEmbed extends HostBase {
     this.frameEl = null;
     this.frameOrigin = "";
     this.refreshing = null;
+    this.resizedPx = null;
   }
 
   private applyFrameAttributes(): void {
     const iframe = this.frameEl;
     if (!iframe) return;
-    iframe.style.height = cssLength(this.getAttribute("height"));
+    // `height` is the initial and fallback height; the frame's own `matih:resize` takes over from it.
+    iframe.style.height = this.resizedPx === null ? cssLength(this.getAttribute("height")) : `${this.resizedPx}px`;
     iframe.title = this.getAttribute("title") || "Matih embed";
   }
 
@@ -366,6 +375,15 @@ export class MatihEmbed extends HostBase {
       case "matih:token-expiring": {
         const embed = data["embed"];
         void this.refresh(typeof embed === "string" ? embed : undefined);
+        break;
+      }
+      case "matih:resize": {
+        // Only from the frame we made, at its origin (checked above). Only a plain, bounded number.
+        const h = data["height"];
+        if (typeof h === "number" && Number.isFinite(h) && h > 0) {
+          this.resizedPx = Math.min(Math.ceil(h), MAX_FRAME_HEIGHT_PX);
+          this.applyFrameAttributes();
+        }
         break;
       }
       case "matih:ready":

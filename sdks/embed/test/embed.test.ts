@@ -368,6 +368,54 @@ describe("token refresh (matih:token-expiring)", () => {
   });
 });
 
+describe("matih:resize", () => {
+  it("takes the frame's height, rounded up, over the height attribute", async () => {
+    const { el, win } = await mount({ src: SRC, token: "met_abc", height: "300" });
+    expect(el.frame!.style.height).toBe("300px");
+    fire({ type: "matih:resize", height: 812.4 }, ORIGIN, win);
+    expect(el.frame!.style.height).toBe("813px");
+    fire({ type: "matih:resize", height: 500 }, ORIGIN, win);
+    expect(el.frame!.style.height).toBe("500px");
+  });
+
+  it("is capped, and only a positive finite number counts", async () => {
+    const { el, win } = await mount({ src: SRC, token: "met_abc", height: "300" });
+    fire({ type: "matih:resize", height: 1e9 }, ORIGIN, win);
+    expect(el.frame!.style.height).toBe("20000px");
+    fire({ type: "matih:resize", height: 400 }, ORIGIN, win);
+    for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, "900", "9px", null, {}, [700]]) {
+      fire({ type: "matih:resize", height: bad }, ORIGIN, win);
+      expect(el.frame!.style.height).toBe("400px");
+    }
+  });
+
+  it("is ignored from another origin or another window", async () => {
+    const { el, win } = await mount({ src: SRC, token: "met_abc", height: "300" });
+    fire({ type: "matih:resize", height: 900 }, "https://evil.example", win);
+    fire({ type: "matih:resize", height: 900 }, ORIGIN, { postMessage: vi.fn() });
+    fire({ type: "matih:resize", height: 900 }, ORIGIN, window);
+    expect(el.frame!.style.height).toBe("300px");
+  });
+
+  it("gives way to a new height attribute, and starts over on a reload", async () => {
+    const { el, win } = await mount({ src: SRC, token: "met_abc", height: "300" });
+    fire({ type: "matih:resize", height: 900 }, ORIGIN, win);
+    el.setAttribute("height", "350");
+    expect(el.frame!.style.height).toBe("350px");
+    fire({ type: "matih:resize", height: 900 }, ORIGIN, win);
+    el.setAttribute("token", "met_two"); // reloads the frame
+    await el.updateComplete;
+    expect(el.frame!.style.height).toBe("350px");
+  });
+
+  it("survives a title change", async () => {
+    const { el, win } = await mount({ src: SRC, token: "met_abc" });
+    fire({ type: "matih:resize", height: 900 }, ORIGIN, win);
+    el.setAttribute("title", "Sales");
+    expect(el.frame!.style.height).toBe("900px");
+  });
+});
+
 describe("events", () => {
   it("emits matih:ready when the frame says so, and the event bubbles out of the shadow root", async () => {
     const { win, readyCount } = await mount({ src: SRC, token: "met_abc" });

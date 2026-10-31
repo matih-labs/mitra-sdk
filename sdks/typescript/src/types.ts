@@ -624,12 +624,18 @@ export interface Embed {
 /** A token minted by this key, as `embeds.list` shows it. Never carries the secret or filter values. */
 export interface EmbedSummary {
   id: string;
+  kind?: string;
   resource?: EmbedResource | null;
+  title?: string | null;
   origins?: string[];
   created_at?: string | null;
   expires_at?: string | null;
-  /** True or false, or the time it was revoked, as the server reports it. */
-  revoked?: boolean | string | null;
+  /** When it was revoked; null while it has not been. */
+  revoked_at?: string | null;
+  /** The API key (or OAuth grant) that minted it. */
+  key?: { integration_id?: string; key_prefix?: string; integration_name?: string } | null;
+  /** The member that key acts as. */
+  member?: { user_id?: string; name?: string } | null;
 }
 
 export interface EmbedList {

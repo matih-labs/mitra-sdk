@@ -183,9 +183,13 @@ describe("embeds.list and embeds.revoke", () => {
             origins: ["https://app.customer.com"],
             created_at: "2026-10-31T10:00:00Z",
             expires_at: "2026-10-31T10:05:00Z",
-            revoked: false,
+            kind: "signed",
+            title: null,
+            revoked_at: null,
+            key: { integration_id: "i1", key_prefix: "mtk_ab", integration_name: "Portal" },
+            member: { user_id: "u1", name: "Asha" },
           },
-          { id: "emt_Cd34", resource: GEMS, revoked: true },
+          { id: "emt_Cd34", resource: GEMS, revoked_at: "2026-10-31T10:02:00Z" },
         ],
       }),
     );
@@ -193,7 +197,11 @@ describe("embeds.list and embeds.revoke", () => {
     expect(m.calls[0].method).toBe("GET");
     expect(m.calls[0].url).toBe(`${BASE}/embeds`);
     expect(out.embeds.map((e) => e.id)).toEqual(["emt_Ab12", "emt_Cd34"]);
-    expect(out.embeds[1]?.revoked).toBe(true);
+    expect(out.embeds[0]?.kind).toBe("signed");
+    expect(out.embeds[0]?.key?.key_prefix).toBe("mtk_ab");
+    expect(out.embeds[0]?.member?.name).toBe("Asha");
+    expect(out.embeds[0]?.revoked_at).toBeNull();
+    expect(out.embeds[1]?.revoked_at).toBe("2026-10-31T10:02:00Z");
     expect(JSON.stringify(out)).not.toContain("met_");
   });
 

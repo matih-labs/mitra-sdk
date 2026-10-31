@@ -480,16 +480,35 @@ class Embed(_Model):
         return embed_src(self.url)
 
 
+class EmbedKey(_Model):
+    """The API key (or OAuth grant) that minted a token."""
+
+    integration_id: str | None = None
+    key_prefix: str | None = None
+    integration_name: str | None = None
+
+
+class EmbedMember(_Model):
+    """The member the minting key acts as."""
+
+    user_id: str | None = None
+    name: str | None = None
+
+
 class EmbedSummary(_Model):
     """One token minted by this key, as ``embeds.list`` shows it. Never carries the secret or
-    the filter values."""
+    the filter values. ``revoked_at`` is None while the token has not been revoked."""
 
     id: str
+    kind: str | None = None
     resource: EmbedResource | None = None
+    title: str | None = None
     origins: list[str] = Field(default_factory=list)
     created_at: str | None = None
     expires_at: str | None = None
-    revoked: bool | str | None = None
+    revoked_at: str | None = None
+    key: EmbedKey | None = None
+    member: EmbedMember | None = None
 
 
 class EmbedList(_Model):

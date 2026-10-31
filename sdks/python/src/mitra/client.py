@@ -540,7 +540,7 @@ class _Embeds(_Resources):
         )
 
     def list(self, **opts: _Opts) -> Any:
-        """Tokens minted by this key: id, resource, origins, created, expires, revoked. Never the
+        """Tokens minted by this key: id, resource, origins, created_at, expires_at, revoked_at, the key and member. Never the
         secret or the filter values."""
         return self._c.request("GET", "/embeds", parse=EmbedList.model_validate, **opts)
 

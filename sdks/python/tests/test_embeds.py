@@ -213,9 +213,18 @@ def test_list_parses_summaries_without_secrets(make_client):
                 "origins": ["https://app.customer.com"],
                 "created_at": "2026-10-31T10:00:00Z",
                 "expires_at": "2026-10-31T10:05:00Z",
-                "revoked": False,
+                "kind": "signed",
+                "title": None,
+                "revoked_at": None,
+                "key": {"integration_id": "i1", "key_prefix": "mtk_ab", "integration_name": "Portal"},
+                "member": {"user_id": "u1", "name": "Asha"},
+                "something_new": 1,
             },
-            {"id": "emt_Cd34", "resource": {"type": "gems", "id": "s1"}, "revoked": True},
+            {
+                "id": "emt_Cd34",
+                "resource": {"type": "gems", "id": "s1"},
+                "revoked_at": "2026-10-31T10:02:00Z",
+            },
         ]
     }
     h = recorder(payload)
@@ -223,8 +232,11 @@ def test_list_parses_summaries_without_secrets(make_client):
     request = h.seen["requests"][0]
     assert request.method == "GET" and str(request.url).endswith("/api/v1/embeds")
     assert [e.id for e in out.embeds] == ["emt_Ab12", "emt_Cd34"]
-    assert out.embeds[0].resource.id == "d_123" and out.embeds[0].revoked is False
-    assert out.embeds[1].revoked is True and out.embeds[1].origins == []
+    first, second = out.embeds
+    assert first.resource.id == "d_123" and first.kind == "signed" and first.revoked_at is None
+    assert first.key.key_prefix == "mtk_ab" and first.key.integration_name == "Portal"
+    assert first.member.user_id == "u1" and first.member.name == "Asha"
+    assert second.revoked_at == "2026-10-31T10:02:00Z" and second.origins == []
     assert not hasattr(out.embeds[0], "token")
 
 

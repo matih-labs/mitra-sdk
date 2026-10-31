@@ -30,7 +30,7 @@ Never print, log or store the `met_` token or the full `url`. Hand the browser t
 
 ## List and revoke
 
-- `GET /embeds`: tokens minted by this key (id, resource, origins, created, expires, revoked). Never the secret and never filter values.
+- `GET /embeds`: `{embeds: [...]}`, the tokens minted by this key: `id`, `kind`, `resource`, `title`, `origins`, `created_at`, `expires_at`, `revoked_at` (null until revoked), `key` (`integration_id`, `key_prefix`, `integration_name`) and `member` (`user_id`, `name`). Never the secret and never filter values.
 - `DELETE /embeds/{id}`: revoke one token of this key by its `emt_...` id. `204`, idempotent. Confirm with the user first.
 
 ## Errors
