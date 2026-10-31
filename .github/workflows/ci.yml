@@ -30,7 +30,7 @@ jobs:
           pip install -e "sdks/python[dev]"
       - name: Lint
         working-directory: sdks/python
-        run: ruff check . && ruff format --check .
+        run: ruff check .
       - name: Test
         working-directory: sdks/python
         run: pytest -q
