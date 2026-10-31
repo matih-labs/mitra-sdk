@@ -183,7 +183,7 @@ class MatihBot:
             slack.files_upload_v2(channel=channel, thread_ts=thread_ts,
                                   file=self.matih.download_image(url), filename=filename,
                                   title=title or filename)
-        except Exception:  # noqa: BLE001 - the text answer already went out
+        except Exception:  # the text answer already went out
             log.exception("could not upload image")
 
 
@@ -200,7 +200,7 @@ def create_app(bot: MatihBot) -> Any:
     app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
     @app.command("/matih")
-    def on_command(ack, command, client):  # noqa: ANN001
+    def on_command(ack, command, client):
         ack()
         channel, user = command["channel_id"], command["user_id"]
         verb, rest = fmt.parse_command(command.get("text", ""))
@@ -222,7 +222,7 @@ def create_app(bot: MatihBot) -> Any:
             bot.workspace(client, channel, None)
 
     @app.event("app_mention")
-    def on_mention(event, client):  # noqa: ANN001
+    def on_mention(event, client):
         question = fmt.strip_mention(event.get("text", ""))
         thread_ts = event.get("thread_ts") or event["ts"]
         if not question:
@@ -231,7 +231,7 @@ def create_app(bot: MatihBot) -> Any:
         bot.ask(client, event["channel"], event["user"], question, thread_ts)
 
     @app.action({"action_id": r"matih_clarify_\d+"})
-    def on_clarify(ack, body, action, client):  # noqa: ANN001
+    def on_clarify(ack, body, action, client):
         ack()
         payload = json.loads(action["value"])
         channel = body["channel"]["id"]
@@ -241,7 +241,7 @@ def create_app(bot: MatihBot) -> Any:
                 conversation_id=payload.get("c"))
 
     @app.action({"action_id": r"matih_switch_\d+"})
-    def on_switch(ack, body, action, client):  # noqa: ANN001
+    def on_switch(ack, body, action, client):
         ack()
         channel = body["channel"]["id"]
         bot.store.set_workspace(channel, action["value"])

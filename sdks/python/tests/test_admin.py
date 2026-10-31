@@ -21,15 +21,19 @@ def recorder(payload=None, status=200):
 
 
 def test_members_list_update_remove(make_client):
+    # Each call gets the shape the server answers it with (list, Member, MemberRemoved).
     h = recorder({"members": []})
     client = make_client(h)
     client.members.list()
     assert h.seen["request"].method == "GET" and h.seen["request"].url.path.endswith("/members")
-    client.members.update("m1", "admin")
+    h = recorder({"id": "m1", "role": "admin"})
+    client = make_client(h)
+    assert client.members.update("m1", "admin").role == "admin"
     req = h.seen["request"]
     assert req.method == "PATCH" and req.url.path.endswith("/members/m1")
     assert body_of(req) == {"role": "admin"}
-    client.members.remove("m1")
+    h = recorder({"removed": "m1"})
+    make_client(h).members.remove("m1")
     assert h.seen["request"].method == "DELETE"
 
 
@@ -60,7 +64,8 @@ def test_invitation_by_email_and_revoke(make_client):
     client = make_client(h)
     client.invitations.create("admin", email="a@example.com")
     assert body_of(h.seen["request"]) == {"role": "admin", "email": "a@example.com"}
-    client.invitations.revoke("i1")
+    h = recorder({"revoked": "i1"})
+    make_client(h).invitations.revoke("i1")
     assert h.seen["request"].method == "DELETE"
     assert h.seen["request"].url.path.endswith("/invitations/i1")
 

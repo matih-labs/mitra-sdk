@@ -20,6 +20,7 @@ import type {
   DuplicateDecision,
   Gem,
   GemList,
+  GemsResult,
   ImageBytesOptions,
   Invitation,
   InvitationList,
