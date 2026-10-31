@@ -1,43 +1,54 @@
 # Jobs
 
-Anything slow returns `202 Accepted` and a **Job**. Poll it or receive a webhook when it finishes.
+Work that can outlast a request runs as a **Job**: `ask` (when you send `Prefer: respond-async`), Gem
+generation, predictions and dashboard images. You get `202 Accepted` and a Job straight away, and poll it
+or receive a webhook when it finishes. Connecting a source and uploading a file are **not** Jobs: they
+answer `201` and you poll `GET /sources/{id}` or `GET /files/{id}` ([Sync vs async](sync-async.md)).
 
 ```json
 {
-  "id": "job_...",
-  "kind": "gems",
-  "state": "running",
-  "result": null,
+  "id": "3f9c1a7b2d4e5f60",
+  "kind": "dashboard_image",
+  "state": "succeeded",
+  "result": {"image_url": "https://workspace.matih.ai/api/v1/media/0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a6978.png",
+             "width": 1600, "height": 1100},
   "error": null,
-  "created_at": "2026-10-31T11:20:00Z",
-  "updated_at": "2026-10-31T11:20:07Z"
+  "created_at": "2026-10-31T10:15:00Z",
+  "updated_at": "2026-10-31T10:15:09Z"
 }
 ```
 
 | Field | Notes |
 |---|---|
-| `kind` | `ask`, `gems`, `prediction`, `dashboard_image` and so on |
-| `state` | `queued`, `running`, `succeeded`, `failed`, `cancelled`. The last three are terminal. |
-| `result` | `null` until `succeeded`. Shape depends on `kind`. |
-| `error` | `null` unless `failed`: `{category, message}` in the same style as [Errors](errors.md) |
+| `kind` | `ask`, `gems`, `prediction` or `dashboard_image` |
+| `state` | `queued`, `running`, `succeeded`, `failed`, `cancelled`. The last three are final. |
+| `result` | `null` until `succeeded`. By kind: `ask` is the Answer; `gems` is `{source_id, state, gem_count}`; `prediction` is `{conversation_id, answer}`; `dashboard_image` is `{image_url, width, height}` (the URL needs no credential and expires in 15 minutes). |
+| `error` | `null` unless `failed`: `{category, message}`. Categories include `forbidden` (the member who asked left the workspace), `not_available`, `not_ready` (the source is not ready for Gems), `timeout`, `generation_failed`, `prediction_failed`, `render_unavailable` and `interrupted`. |
 
 ## Endpoints
 
 | | |
 |---|---|
-| `GET /api/v1/jobs/{id}` | Current state. Needs any one of the job-starting scopes (`ask`, `predict`, `gems:generate`, `dashboards:read`). |
-| `POST /api/v1/jobs/{id}/cancel` | Ask the job to stop. |
+| `GET /api/v1/jobs/{id}` | Current state. Needs `workspaces:read` and the scope of the job's kind (`ask`, `gems:generate`, `predict`, `dashboards:read`). |
+| `POST /api/v1/jobs/{id}/cancel` | Same scopes. A queued job stops at once, a running one at its next checkpoint, a final one is left as it is. Returns the Job in its new state. |
+
+A job of another member or workspace, or one your credential has no scope for, is a `404`.
+
+A job that is interrupted (a deploy, a crashed worker) is picked up again and finished, not lost; after
+three interruptions it fails with category `interrupted`. Gem generation gives up after 20 minutes and a
+prediction after 30 (`timeout`). `Idempotency-Key` on `POST /ask` or `POST /predictions` returns the same
+Job on a retry and charges once.
 
 ## Polling
 
-Poll gently: every 5 seconds for the first minute, every 15 seconds up to five minutes, then every 30
-to 60 seconds. A prediction can take up to 30 minutes, so give up after that and tell the person. Honour
+Every 2 seconds is plenty for a quick job (the `Retry-After` on the `202` says so). For a prediction,
+which takes minutes, poll every 5 to 15 seconds, and give up after 30 minutes and tell the person. Honour
 `Retry-After` on a `429`.
 
 === "curl"
 
     ```bash
-    JOB_ID=job_...
+    JOB_ID=3f9c1a7b2d4e5f60
     until STATE=$(curl -s "https://workspace.matih.ai/api/v1/jobs/$JOB_ID" \
           -H "Authorization: Bearer $MATIH_API_KEY" | jq -r .state); \
           [ "$STATE" = succeeded ] || [ "$STATE" = failed ] || [ "$STATE" = cancelled ]; do
@@ -156,9 +167,11 @@ to 60 seconds. A prediction can take up to 30 minutes, so give up after that and
 
 At any scale prefer webhooks: `job.completed` fires when any job reaches a final state, and
 `gems.ready`, `prediction.completed` and `dashboard_image.ready` fire for those kinds. See
-[Webhooks](../guides/webhooks.md).
+[Webhooks](../guides/webhooks.md). The payload is `{job_id, kind, state, result, error}`, the same as the Job, and
+it is delivered once the job is final. Jobs started by a credential notify that credential's webhooks.
 
 ## Idempotency
 
-Retrying a credit-spending `POST` with the same `Idempotency-Key` is never charged twice, and returns
-the same Job. Use a **new** key for a new logical request. The SDKs generate and reuse the key for you.
+Retrying `POST /ask` or `POST /predictions` with the same `Idempotency-Key` is answered once, charged once
+and returns the same Job. Use a **new** key for a new logical request. The SDKs generate and reuse the key
+for you.

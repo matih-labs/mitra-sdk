@@ -1,16 +1,37 @@
 # Sync vs async
 
 Matih follows RFC 7240 (`Prefer`) so you choose, per request, whether to hold the connection or
-come back later.
+come back later. Every response carries `Preference-Applied` saying what was done.
 
 | Operation | Default | How to change |
 |---|---|---|
-| `POST /ask` | Synchronous: the answer in the response. `Accept: text/event-stream` or `"stream": true` gives server-sent events. | `Prefer: respond-async` returns `202` and a [Job](jobs.md). |
-| `POST /ask/audio` | Synchronous | Same as `/ask` |
-| `POST /gems/generate`, `POST /predictions`, `POST /dashboards/{id}/image`, source creation, file upload | **Asynchronous**: `202` and a Job | `Prefer: wait=N` (or `?wait=N`) holds the connection up to N seconds and answers inline if the job finished in time; otherwise you still get the `202`. |
+| `POST /ask` | **Sync**: `200` and the Answer, `Preference-Applied: respond-sync`. | `Prefer: respond-async` or `?async=true`: `202` and a [Job](jobs.md) of kind `ask`. `Accept: text/event-stream` or `"stream": true` answers as server-sent events (`respond-stream`). |
+| `POST /ask/audio` | Sync only | none |
+| `POST /gems/generate` | **Async**: `202` and a Job | `Prefer: wait=N` or `?wait=N` |
+| `POST /predictions` | **Async**: `202` and a Job | `Prefer: wait=N` or `?wait=N` |
+| `POST /dashboards/{id}/image` | **Async**: `202` and a Job | `Prefer: wait=N` or `?wait=N` |
+| `POST /sources` | `201` as soon as the source is saved (it is then read in the background) | `?wait=N` waits until Ask can use it. Not a Job: poll `GET /sources/{id}` for `readiness.can_ask`. |
+| `POST /files` | `201` as soon as the file is stored, `status: processing` | `?wait=N` waits for it to be read (`202` if it is still being read). Not a Job: poll `GET /files/{id}` for `ready`. |
 
-The response header `Preference-Applied` tells you which mode actually ran, for example
-`Preference-Applied: respond-async` or `Preference-Applied: wait=20`.
+`wait=N` is the number of seconds the server may hold the request. `?wait=N` beats `Prefer: wait=N`. For
+the four Job operations N is 0 to 60 (a larger `?wait=` is refused with `422`; a larger header value is
+capped at 60). For `POST /sources` and `POST /files` N goes up to 120. The wait never ties up a worker, so
+it is safe to use from many callers at once.
+
+If the job finishes in time you get `200` and the finished Job; if not, `202` and the Job as it stands,
+and you carry on with polling or a [webhook](../guides/webhooks.md). `202` answers for a Job also carry
+`Location: /api/v1/jobs/{id}` and `Retry-After: 2`.
+
+| `Preference-Applied` | Means |
+|---|---|
+| `respond-sync` | `POST /ask` waited and answered inline |
+| `respond-async` | A Job was queued and returned at once |
+| `respond-stream` | `POST /ask` answered as server-sent events |
+| `wait=N` | A wait of N seconds was honoured, whether or not the work finished |
+
+A sync `ask` can take tens of seconds for a hard question: set your client's timeout to 90 seconds or more,
+or use `respond-async` behind a gateway that cuts requests at 30 or 60 seconds. `Idempotency-Key` on
+`POST /ask` and `POST /predictions` makes a retry answer once and charge once.
 
 ## Ask asynchronously
 
@@ -62,15 +83,15 @@ The response header `Preference-Applied` tells you which mode actually ran, for 
 `202 Accepted` with a Job:
 
 ```json
-{"id": "job_...", "kind": "ask", "state": "queued", "result": null, "error": null,
+{"id": "3f9c1a7b2d4e5f60", "kind": "ask", "state": "queued", "result": null, "error": null,
  "created_at": "2026-10-31T11:20:00Z", "updated_at": "2026-10-31T11:20:00Z"}
 ```
 
-When the job succeeds, `result` holds the Answer.
+The headers are `Preference-Applied: respond-async`, `Location: /api/v1/jobs/3f9c1a7b2d4e5f60` and `Retry-After: 2`. When the job succeeds, `result` holds the Answer.
 
 ## Hold the line for a while with `wait=N`
 
-For a dashboard render that usually takes a few seconds, ask the server to wait up to 20 seconds:
+A dashboard picture usually takes a few seconds. Ask the server to wait up to 20 seconds:
 
 ```bash
 curl -si -X POST "https://workspace.matih.ai/api/v1/dashboards/$DASHBOARD_ID/image" \
@@ -86,11 +107,12 @@ curl -si -X POST "https://workspace.matih.ai/api/v1/dashboards/$DASHBOARD_ID/ima
 
 | Situation | Choose |
 |---|---|
-| A chat reply the user is waiting for | Sync `ask` (or SSE for progress) |
+| A chat reply the person is waiting for | Sync `ask` (or SSE for progress) |
 | A chat platform with a short callback deadline (a few seconds) | `Prefer: respond-async`, then reply later from the job result or webhook |
-| Forecasts (up to 30 minutes), Gem generation | Default async; webhook instead of polling at scale |
-| A script that wants one call | `Prefer: wait=N` then poll if you still get `202` |
+| Forecasts (minutes) and Gem generation | Default async; a webhook instead of polling at scale |
+| A script that wants one call most of the time | `Prefer: wait=20`, then poll if you still get `202` |
+| Connecting a source or uploading a file | `?wait=60`, then poll the source or file if it is still building |
 
 !!! tip "SDKs"
-    The Python and TypeScript clients wrap the async operations for you: `client.jobs.wait(job)` polls with
-    backoff until the job is terminal. See [Jobs](jobs.md).
+    The Python and TypeScript clients wrap the async operations for you: `client.jobs.wait(job)` polls
+    until the job is final. See [Jobs](jobs.md).
