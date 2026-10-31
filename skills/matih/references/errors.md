@@ -3,31 +3,35 @@
 Error body:
 
 ```json
-{"detail": {"category": "scope", "message": "Missing scope: ask", "code": "optional_machine_code"}}
+{"detail": {"category": "scope", "message": "This credential is not allowed to do that: it needs ask."}}
 ```
 
-Always read `detail.category` first, then `message`. `code` is optional. Failed jobs carry an `error` object with `category` and `message` in the same style.
+Always read `detail.category` first, then `message`. `code` is optional and, where present, a finer machine-readable reason. Failed jobs carry an `error` object with `category` and `message` in the same style.
 
 ## By HTTP status
 
 | Status | Category | Meaning | What to do |
 | --- | --- | --- | --- |
-| 401 | (none) | Missing, wrong, revoked or expired credential (keys do not expire by default). Response has `WWW-Authenticate`. | API key: ask the user for a new key. OAuth: refresh once, then re-login. Do not loop. |
-| 402 | `credits` | The workspace is out of credits. | Stop. Tell the user; an admin must add credits. Do not retry. |
-| 402 | `member_cap` | The workspace is at its member limit. | Tell the user an admin must raise the cap or free a seat. |
+| 401 | `authentication` | Missing, wrong, revoked or expired credential (keys do not expire by default). Response has `WWW-Authenticate`. An MCP connector key used outside `/api/v1/mcp` is also a 401. | API key: ask the user for a new key. OAuth: refresh once, then re-login. For a connector key on a REST path, use an API key (`Settings › API & MCP`). Do not loop. |
+| 402 | `not_ready` | The workspace has no Matih Credits left. | Stop. Tell the user; an admin must add credits. Do not retry. |
+| 402 | `member_cap` | The member reached the monthly credit cap an admin set for them. | Tell the user an admin must raise the cap. Do not retry. |
 | 403 | `scope` | The credential lacks the scope for this call. | Name the scope (see `auth.md`). Ask the user to issue a key or grant with that scope. A key made without the matching product (for example Files) lacks its scopes. |
-| 403 | (none or `scope`) on a non-MCP path | An MCP connector key was used outside `/api/v1/mcp`. | Use an API key (`Settings › API & MCP`) for REST calls. |
 | 403 | `workspace_role` | The user's role in this workspace is too low for this action. | Tell the user which kind of role is needed (for example admin to add sources). Do not work around it. |
-| 403 | `source_access` | The user cannot access that source, or the `source_id` belongs to another workspace. | Re-run `list_sources` for the current workspace and pick again. Ask the user if no source is permitted. |
-| 409 | `busy` | Another request in the same conversation or the same long task is already running. | Wait 3 to 5 seconds and retry the same request with the same `Idempotency-Key`. Give up after about a minute and tell the user. |
-| 429 | (rate limit) | Too many requests. `Retry-After` header gives seconds. | Wait at least that long, then retry once. Back off exponentially on repeats. |
-| 422 | (validation) | On `POST /sources`: the connection test failed, so the source was not created. The body carries the test result. On other endpoints: invalid field values. | Read the test result (host unreachable, bad credentials, missing permission, wrong database). Tell the user what failed without echoing secrets, fix the config together, and call `POST /sources/test` until it passes before `POST /sources` again. Do not retry unchanged. |
-| 4xx other | varies | Bad input (for example a missing field or an unknown id). | Fix the request. Do not retry unchanged. Read `message`. |
-| 5xx | varies | Server error. | Retry up to 3 times with backoff (2s, 5s, 10s) using the same `Idempotency-Key`. Then report the `request_id` if one is available. |
+| 403 | `workspace` | A key pinned to one workspace was sent an `X-Matih-Workspace` for another. | Drop the header, or use a key made in that workspace. |
+| 403 | `source_access` | The user may not use that source. | Re-run `list_sources` for the current workspace and pick again. Ask the user if no source is permitted. |
+| 403 | `support_view` | The call came from a Support View session. | Not available there. |
+| 404 | `not_found` | No such resource in this workspace. A resource of another member or workspace gives the same 404. | List again; a `source_id` from another workspace looks like this. |
+| 409 | varies | The resource is not in a state for this: a file not waiting for a decision, an invitation no longer open, a workspace with 20 webhooks already. | Read `message`, list the resource, and fix the state. Do not retry unchanged. |
+| 413 / 415 | `too_large` / `unsupported_audio_type` | An upload over the size limit; audio over 5 MB or not audio. | Send a smaller or supported file. |
+| 422 | `invalid_request` | An invalid body or parameter; `message` names the field. | Fix the request. Do not retry unchanged. |
+| 422 | `connection` | On `POST /sources`: the connection test failed, so nothing was saved. The body also carries the `test` result. | Read the test result (host unreachable, bad credentials, missing permission, wrong database). Tell the user what failed without echoing secrets, fix the config together, and call `POST /sources/test` until it passes. |
+| 422 | `not_heard` | `POST /ask/audio`: no speech could be made out. | Ask the user to speak again or type the question. |
+| 429 | `rate_limited` | Too many requests. `Retry-After` header gives seconds. | Wait at least that long, then retry once. Back off exponentially on repeats. |
+| 5xx / 503 | `internal`, `unavailable`, `disabled`, `speech_unavailable`, `language_unavailable` | Server error or a part that is off or busy. | Retry up to 3 times with backoff (2s, 5s, 10s). For `POST /ask` and `POST /predictions` reuse the same `Idempotency-Key`. Then report the `request_id` if one is available. |
 
 ## Idempotency
 
-Retrying a credit-costing POST (`/ask`, `/ask/audio`, `/gems/generate`, `/predictions`, `/dashboards/{id}/image`) with the same `Idempotency-Key` is not charged twice. Always reuse the key on retry. Use a new key for a new logical request.
+Only `POST /ask` and `POST /predictions` honour `Idempotency-Key`: a retry with the same key answers once and is charged once. Reuse the key on retry and use a new one for a new logical request. Other POSTs (`/gems/generate`, `/dashboards/{id}/image`, `/ask/audio`, `/sources`, `/files`, `/invitations`) ignore it, so check state before you repeat one.
 
 ## Distinguish from answer statuses
 
@@ -35,11 +39,11 @@ An HTTP 200 Answer with `status: "error"`, `"empty"` or `"clarification"` is not
 
 ## Job errors
 
-A job with `state: "failed"` has `error.category` and `error.message`. The same categories apply (for example `credits` when funds ran out partway). A `cancelled` job needs no error handling beyond telling the user.
+A job with `state: "failed"` has `error.category` and `error.message`. The categories include `no_credits`, `member_cap`, `not_available`, `not_ready`, `timeout`, `generation_failed`, `prediction_failed`, `render_unavailable`, `interrupted`, `forbidden` and `internal`. A `cancelled` job needs no error handling beyond telling the user.
 
 ## MCP
 
-Tool errors come back as tool results marked as errors with the same category and message text. Treat them the same as the HTTP cases above. A tool-level 401 usually means the MCP connection needs to be re-authenticated by the user.
+Tool errors come back as tool results marked as errors with the same category and message text. Treat them the same as the HTTP cases above. A 401 means the MCP connection needs to be re-authenticated by the user.
 
 ## Telling the user
 

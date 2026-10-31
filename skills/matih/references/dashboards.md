@@ -4,7 +4,7 @@ Scope: `dashboards:read`.
 
 ## List and read
 
-MCP: `list_dashboards`. REST: `GET /dashboards` returns `{"dashboards": [{"id", "title", "updated_at"}]}`. `GET /dashboards/{id}` returns one dashboard's details.
+MCP: `list_dashboards`. REST: `GET /dashboards` returns `{"dashboards": [{"id", "title", "source_id", "status", "revision", "widget_count", "created_at", "updated_at"}]}` (`status` is `draft` or `saved`). `GET /dashboards/{id}` returns one dashboard with its `widgets` (`id`, `title`, `visual`, `question`).
 
 Match the user's wording to `title`. If several are close, list them and ask.
 
@@ -12,19 +12,19 @@ Match the user's wording to `title`. If several are close, list them and ask.
 
 MCP: `dashboard_image` with `dashboard_id`. REST:
 
-- `POST /dashboards/{id}/image` returns 202 and a Job (`kind: "dashboard_image"`). On success `result` is `{"image_url", "width", "height"}`.
-- `GET /dashboards/{id}/image.png` with auth: redirects to a fresh image when one is cached, else returns 202 with a Job. Follow redirects (`curl -L`).
+- `POST /dashboards/{id}/image` with an optional body `{"width": 1600}` (400 to 3200) returns 202 and a Job (`kind: "dashboard_image"`). Add `?wait=20` (or `Prefer: wait=20`) to get the finished Job when it is quick. On success `result` is `{"image_url", "width", "height"}`. A dashboard drawn in the last ten minutes at the same width is reused.
+- `GET /dashboards/{id}/image.png?width=` with auth: `303` to the image when one was drawn recently, else it starts a drawing and returns 202 with a Job. Follow redirects (`curl -L`).
 
-Send an `Idempotency-Key` on the POST.
+Drawing uses no credits and the POST does not honour `Idempotency-Key`.
 
 ## Flow
 
 1. Find the dashboard id (`list_dashboards`).
-2. Call `dashboard_image`. If the response is the image, show it.
-3. If it is a job, poll `get_job` every 3 seconds for the first 30 seconds, then every 5 to 10 seconds. Rendering normally takes seconds to a minute.
+2. Call `dashboard_image`. Over MCP it waits up to 20 seconds and returns the picture. If it does, show it.
+3. If it returns a job id, poll `get_job` every 10 to 15 seconds. Rendering is usually 5 to 20 seconds; a failed render has category `render_unavailable`.
 4. When `state` is `succeeded`, show or download `result.image_url`.
 
-`image_url` is signed, short-lived (15 minutes) and needs no auth. Download or display immediately, and request a new render if it expired. A `dashboard_image.ready` webhook is available (REST only).
+`image_url` is a public, unguessable URL that expires after 15 minutes and needs no auth. Download or display immediately, and request a new render if it expired. A `dashboard_image.ready` webhook is available (REST only).
 
 ## Notes
 

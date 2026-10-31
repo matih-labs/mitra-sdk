@@ -14,27 +14,28 @@ Response:
 
 ```json
 {
-  "current": "ws_123",
+  "current": "usr_3f9a",
   "workspaces": [
-    {"id": "ws_123", "name": "Acme Retail", "role": "admin", "kind": "team"}
-  ]
+    {"id": "usr_3f9a", "name": "Acme Retail", "role": "admin", "kind": "email", "own": true}
+  ],
+  "invitations": []
 }
 ```
 
-`role` is the caller's role in that workspace. `kind` distinguishes personal and team workspaces.
+`role` is the caller's role in that workspace (`viewer` < `user` < `admin` < `owner`). `kind` is how the workspace was made (`email` or `phone`), and `own` is true for the one the caller's own sign-up created. `invitations` lists open invitations addressed to a signed-in person; it is left out for a key.
 
 ## Switch
 
 Two ways, use one:
 
-1. Persistent default. MCP: `use_workspace` with `workspace_id`. REST: `PUT /me/workspace` with `{"workspace_id": "ws_456"}`. Later requests without a header use this workspace.
-2. Per request. Send `X-Matih-Workspace: ws_456`. Good for scripts that touch several workspaces without changing the user's default.
+1. Persistent default. MCP: `use_workspace` with `workspace_id`. REST: `PUT /me/workspace` with `{"workspace_id": "usr_71c0"}`. Later requests without a header use this workspace. It answers `{current, name}`.
+2. Per request. Send `X-Matih-Workspace: usr_71c0`. Good for scripts that touch several workspaces without changing the user's default.
 
 After switching, call `list_sources` again. Source ids differ per workspace and a `source_id` from the old workspace will fail with `source_access`.
 
 ## API keys cannot switch
 
-An API key is pinned to the workspace it was created in. A different `X-Matih-Workspace` header is refused, and `use_workspace` cannot move it. To work in another workspace the user must create a key there (`Settings › API & MCP`), or connect through OAuth.
+An API key is pinned to the workspace it was created in. A different `X-Matih-Workspace` header is refused (403, category `workspace`), and `use_workspace` cannot move it. To work in another workspace the user must create a key there (`Settings › API & MCP`), or connect through OAuth.
 
 ## Members
 
