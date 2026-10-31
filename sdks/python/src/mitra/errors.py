@@ -61,8 +61,9 @@ class CreditsError(MitraError):
 
 
 class BusyError(MitraError):
-    """409: category ``busy`` (another prediction is running; retry shortly), or a conflict such as
-    revoking an invitation that was already settled. Read ``category`` and ``message``."""
+    """409: a conflict with the current state: revoking an invitation that is no longer open,
+    answering a file that is not waiting for a decision, or a workspace already at its 20
+    webhooks. Read ``category``, ``code`` and ``message``."""
 
 
 class RateLimitError(MitraError):

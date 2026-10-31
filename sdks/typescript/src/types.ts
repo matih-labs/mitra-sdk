@@ -36,7 +36,7 @@ export interface Clarification {
   options: string[];
 }
 
-export type AnswerStatus = "answered" | "clarification" | "empty" | "error";
+export type AnswerStatus = "answered" | "empty" | "clarification" | "error" | "cancelled";
 
 /** What the speech recogniser heard, returned for voice questions. */
 export interface Heard {
@@ -87,7 +87,7 @@ export interface StreamEvent {
   id?: string;
 }
 
-export type JobKind = "gems" | "prediction" | "dashboard_image";
+export type JobKind = "ask" | "gems" | "prediction" | "dashboard_image";
 export type JobState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 export interface JobError {
@@ -96,6 +96,11 @@ export interface JobError {
   code?: string;
 }
 
+/**
+ * Work that outlasts a request. `result` is set once it succeeded: for `ask` the
+ * Answer, for `gems` `{ source_id, state, gem_count }`, for `prediction`
+ * `{ conversation_id, answer }` and for `dashboard_image` `{ image_url, width, height }`.
+ */
 export interface Job<R = Record<string, unknown>> {
   id: string;
   kind: JobKind;
@@ -112,21 +117,24 @@ export interface DashboardImageResult {
   height: number;
 }
 
-export interface PredictionAttachment {
-  type: "forecast" | "table" | "model" | "what_if";
-  [key: string]: unknown;
+export interface GemsResult {
+  source_id: string;
+  state: string;
+  gem_count: number;
 }
 
+/** `result` of a succeeded prediction job. */
 export interface PredictionResult {
-  answer: string;
-  attachments: PredictionAttachment[];
-  image_url?: string;
+  conversation_id: string;
+  answer: Answer;
 }
 
 export interface PredictionParams {
   question: string;
   source_id?: string;
   conversation_id?: string;
+  /** BCP-47 language of the response text, e.g. `hi-IN`. */
+  language?: string;
 }
 
 export interface WaitOptions extends Omit<RequestOptions, "timeoutMs" | "idempotencyKey"> {
@@ -150,16 +158,24 @@ export interface WaitOptions extends Omit<RequestOptions, "timeoutMs" | "idempot
  * Options for calls that can outlive one request: Gem generation, predictions,
  * dashboard images, source creation and file uploads.
  *
- * By default the call blocks: it sends `Prefer: wait=N` and, when the server
- * answers 202 with a job, polls the job until it finishes or `wait` runs out
- * (then JobTimeoutError; the job keeps running). With `background: true` it
- * returns right away with what the server answered, a job to follow with
- * `jobs.wait` or a webhook.
+ * By default the call blocks: it sends `Prefer: wait=N` (N is at most 60 for
+ * jobs, 120 for sources and files).
+ *
+ * - Jobs (gems, dashboard images, predictions): when the job is not finished, the
+ *   job is polled until it ends or `wait` runs out (then JobTimeoutError; the
+ *   job keeps running).
+ * - Sources and files are not jobs: the resource is polled (`sources.get`,
+ *   `files.get`) until it is ready, and returned as it stands when `wait` runs
+ *   out. Nothing is thrown.
+ *
+ * With `background: true` the call returns right away with what the server
+ * answered: a job to follow with `jobs.wait` or a webhook, or the saved
+ * source or stored file to follow with `get`.
  */
 export interface LongCallOptions extends RequestOptions {
   /** Seconds to wait in total. Defaults depend on the call (5 to 31 minutes). */
   wait?: number;
-  /** Return the job (or whatever the server answered) immediately. */
+  /** Return immediately with what the server answered. */
   background?: boolean;
   /** First delay between job polls. Default 1000. */
   pollIntervalMs?: number;
@@ -188,44 +204,123 @@ export type Scope =
   | "workspaces:read"
   | "sources:read"
   | "sources:write"
+  | "files:read"
+  | "files:write"
   | "gems:read"
   | "gems:generate"
   | "ask"
   | "dashboards:read"
   | "predict"
-  | "webhooks:manage"
   | "members:read"
-  | "members:manage";
+  | "members:manage"
+  | "webhooks:manage";
+
+export type Role = "owner" | "admin" | "user" | "viewer";
+/** Roles you can give: never `owner`. */
+export type GivableRole = "admin" | "user" | "viewer";
+/** Kept for compatibility; same as `Role`. */
+export type MemberRole = Role;
 
 export interface Workspace {
   id: string;
   name: string;
-  role: string;
+  role: Role;
   kind: string;
+  own: boolean;
+}
+
+/** An open invitation addressed to the caller. */
+export interface WorkspaceInvitation {
+  id: string;
+  workspace_id?: string;
+  workspace_name?: string;
+  role?: Role;
+  invited_by?: string | null;
+  expires_at?: string;
+  [key: string]: unknown;
 }
 
 export interface WorkspaceList {
   current: string | null;
   workspaces: Workspace[];
+  invitations?: WorkspaceInvitation[] | null;
+}
+
+export interface WorkspaceChosen {
+  current: string;
+  name?: string;
+}
+
+export interface Catalog {
+  readiness: string;
+  notes: string[];
+  tables: number;
+  included_tables: number;
+  last_refresh_at?: string | null;
+  published_version?: number | null;
+  reading_now: boolean;
+}
+
+/** `can_ask` is true once Ask can use the source; `phase` is `ready`, `building` or `not_connected`. */
+export interface SourceReadiness {
+  source_id: string;
+  state: string;
+  phase: "ready" | "building" | "not_connected";
+  can_ask: boolean;
+  message: string;
+  catalog?: Catalog | null;
 }
 
 export interface Source {
   id: string;
   name: string;
-  type: string;
-  status: string;
-  active: boolean;
+  connector_type: string;
+  settings: Record<string, unknown>;
+  /** Names of the secret fields that are set; their values are never returned. */
+  secret_fields_set: string[];
+  state: string;
+  is_active: boolean;
+  is_sample: boolean;
+  managed_by?: string | null;
+  last_test_ok?: boolean | null;
+  last_test_message?: string | null;
+  created_at: string;
+  updated_at: string;
+  readiness?: SourceReadiness | null;
 }
+
+/** Kept for compatibility; same as `Source`. */
+export type SourceDetail = Source;
 
 export interface SourceList {
   sources: Source[];
+  active_source_id?: string | null;
 }
 
+/** `connector_type` plus that type's fields (see `connectors.list`), including any credentials. */
 export type SourceConfig = Record<string, unknown>;
 
-/** A source with the extra fields returned when fetching one by id, including readiness. */
-export interface SourceDetail extends Source {
-  [key: string]: unknown;
+export interface SourceTestResult {
+  ok: boolean;
+  connector_type: string;
+  duration_ms: number;
+  message: string;
+  error_category?: string | null;
+  server_version?: string | null;
+  warnings: string[];
+  field?: string | null;
+}
+
+/** What `sources.create` returns. Check `source.readiness.can_ask` before asking. */
+export interface SourceCreated {
+  source: Source | null;
+  test: SourceTestResult | null;
+  applied: boolean;
+  catalog_job_id?: string | null;
+}
+
+export interface SourceDeleted {
+  deleted: boolean;
 }
 
 export interface CreateSourceParams {
@@ -234,32 +329,97 @@ export interface CreateSourceParams {
   activate?: boolean;
 }
 
-/** Connector types and their fields, as returned by the API. */
-export type ConnectorList = Record<string, unknown>;
+export interface ConnectorField {
+  name: string;
+  label?: string;
+  type?: string;
+  required?: boolean;
+  secret?: boolean;
+  default?: unknown;
+  help?: string | null;
+  options?: { value: string; label: string }[] | null;
+  visible_when?: Record<string, string[]> | null;
+  group?: string | null;
+  advanced?: boolean;
+}
 
+export interface Connector {
+  type: string;
+  label?: string;
+  description?: string;
+  docs_url?: string | null;
+  notes: string[];
+  driver_installed: boolean;
+  fields: ConnectorField[];
+}
+
+/** Connector types and the fields each takes. */
+export interface ConnectorList {
+  connectors: Connector[];
+}
+
+export type FileStatus =
+  | "uploading"
+  | "validating"
+  | "processing"
+  | "ready"
+  | "needs_attention"
+  | "failed"
+  | "deleting"
+  | "deleted";
+
+export interface FileTableRef {
+  model_name: string;
+  label?: string;
+  rows?: number | null;
+  column_count?: number | null;
+}
+
+/**
+ * An uploaded file. `ready` is true once its tables can be asked about;
+ * `decision_required: "duplicate"` means it waits for `files.duplicate`.
+ */
 export interface UploadedFile {
   id: string;
-  /** Upload and processing status. */
-  status: string;
-  /** State of the automatic analysis of the file, when reported. */
-  analysis_state?: string;
-  /** Set when the file needs a decision, e.g. it duplicates an earlier upload. */
-  decision_required?: unknown;
-  [key: string]: unknown;
+  name: string;
+  format?: string | null;
+  size_bytes: number;
+  status: FileStatus;
+  stage?: string | null;
+  ready: boolean;
+  analysis_state?: string | null;
+  warnings: string[];
+  error_category?: string | null;
+  error_message?: string | null;
+  retryable: boolean;
+  duplicate_of?: string | null;
+  decision_required?: "duplicate" | null;
+  decision_options: DuplicateDecision[];
+  tables: FileTableRef[];
+  uploaded_at?: string | null;
+  processed_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface UploadedFileList {
   files: UploadedFile[];
+  total: number;
 }
 
-/** How to resolve a duplicate upload; the allowed values come from `decision_required`. */
-export type DuplicateDecision = string;
+/** How to resolve a duplicate upload: use the earlier file, keep both, or drop this one. */
+export type DuplicateDecision = "use_existing" | "keep_both" | "cancel";
 
 export interface UploadOptions {
   filename?: string;
   contentType?: string;
-  /** What to do when the file duplicates an earlier upload. */
-  onDuplicate?: string;
+  /** `ask` (default) waits for your decision on an identical file; `keep_both` keeps both. */
+  onDuplicate?: "ask" | "keep_both";
+}
+
+export interface Figure {
+  label: string;
+  value: string;
 }
 
 export interface Gem {
@@ -267,23 +427,50 @@ export interface Gem {
   kind: string;
   headline: string;
   explanation: string;
-  figures: unknown;
-  question: string;
-  image_url: string | null;
-  created_at: string;
+  figures: Figure[];
+  question?: string | null;
+  source_id?: string | null;
+  image_url?: string | null;
+  created_at?: string | null;
 }
 
+export type GemFeedState =
+  | "none"
+  | "running"
+  | "ready"
+  | "partial"
+  | "empty"
+  | "insufficient"
+  | "failed"
+  | "not_ready"
+  | "no_source";
+
 export interface GemList {
-  state: string;
+  /** `none` means no Gems yet: call `gems.generate`. */
+  state: GemFeedState;
   gems: Gem[];
   generated_at: string | null;
+}
+
+export interface DashboardWidget {
+  id: string;
+  title: string;
+  visual: string;
+  question?: string | null;
 }
 
 export interface Dashboard {
   id: string;
   title: string;
+  source_id: string;
+  status: "draft" | "saved";
+  revision: number;
+  widget_count: number;
+  created_at?: string;
   updated_at: string;
-  [key: string]: unknown;
+  /** Present when one dashboard is read. */
+  description?: string;
+  widgets?: DashboardWidget[];
 }
 
 export interface DashboardList {
@@ -300,9 +487,13 @@ export interface Webhook {
   id: string;
   url: string;
   events: WebhookEventName[];
+  created_at: string;
+  disabled_at?: string | null;
+  disabled_reason?: string | null;
+  failure_count: number;
+  last_success_at?: string | null;
   /** Signing secret (`whsec_...`). Only present in the response that creates the webhook. */
   secret?: string;
-  [key: string]: unknown;
 }
 
 export interface WebhookList {
@@ -310,16 +501,32 @@ export interface WebhookList {
 }
 
 /**
- * One delivery attempt. Deliveries are sent with the headers
+ * One delivery. Deliveries are sent with the headers
  * `Matih-Signature`, `Matih-Event` and `Matih-Delivery`.
  */
 export interface WebhookDelivery {
   id: string;
-  [key: string]: unknown;
+  event_id: string;
+  event: string;
+  attempt: number;
+  /** `pending`, `retrying`, `delivered`, `failed` or `abandoned`. */
+  state: string;
+  next_attempt_at?: string | null;
+  last_status?: number | null;
+  last_error?: string | null;
+  created_at: string;
+  delivered_at?: string | null;
 }
 
 export interface WebhookDeliveryList {
   deliveries: WebhookDelivery[];
+}
+
+export interface WebhookTestResult {
+  delivery_id: string;
+  delivered: boolean;
+  status?: number | null;
+  error?: string | null;
 }
 
 export interface CreateWebhookParams {
@@ -327,56 +534,95 @@ export interface CreateWebhookParams {
   events: WebhookEventName[];
 }
 
-export type MemberRole = "owner" | "admin" | "member" | (string & {});
-
 export interface Member {
   id: string;
-  role: MemberRole;
+  name: string;
   email?: string | null;
   phone?: string | null;
-  name?: string | null;
-  [key: string]: unknown;
+  role: Role;
+  whatsapp_only: boolean;
+  joined_at?: string | null;
+  last_seen_at?: string | null;
+  monthly_cap_credits?: number | null;
+  you: boolean;
+  can_change_role: boolean;
+  can_remove: boolean;
 }
 
 export interface MemberList {
   members: Member[];
 }
 
+export interface MemberRemoved {
+  removed: string;
+}
+
 export interface UpdateMemberParams {
-  role: MemberRole;
+  role: GivableRole;
 }
 
 export interface Invitation {
   id: string;
-  role: MemberRole;
-  email?: string | null;
-  phone?: string | null;
-  [key: string]: unknown;
+  channel: "email" | "phone";
+  target: string;
+  role: Role;
+  whatsapp_only: boolean;
+  created_at: string;
+  expires_at: string;
+  expired: boolean;
+  sent_at?: string | null;
+  /** How it went out: `email`, `whatsapp`, or null. */
+  delivered?: string | null;
+  /** A phone invitation's code, shown once when it is made, if it could not be delivered. */
+  join_code?: string | null;
+  join_message?: string | null;
+  join_url?: string | null;
 }
 
 export interface InvitationList {
   invitations: Invitation[];
 }
 
-/** Invite by email or by phone number; pass one of the two. */
+export interface InvitationRevoked {
+  revoked: string;
+}
+
+/** Invite by email or by phone number; pass exactly one of the two. */
 export interface CreateInvitationParams {
   email?: string;
   phone?: string;
-  role: MemberRole;
+  /** `admin`, `user` or `viewer`. Default `user`. */
+  role?: GivableRole;
+  /** Let the person use the workspace on WhatsApp only. Default false. */
+  whatsappOnly?: boolean;
 }
 
-export interface ConversationSummary {
+export interface ConversationMessage {
   id: string;
-  [key: string]: unknown;
-}
-
-export interface ConversationList {
-  conversations: ConversationSummary[];
+  role: string;
+  text: string;
+  sql?: string | null;
+  created_at?: string;
 }
 
 export interface Conversation {
   id: string;
-  [key: string]: unknown;
+  title: string;
+  source_id?: string | null;
+  /** Where it started: `web`, `whatsapp`, `api` or `mcp`. */
+  channel?: string | null;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+  /** Present when one conversation is read. */
+  messages?: ConversationMessage[] | null;
+}
+
+/** Kept for compatibility; same as `Conversation`. */
+export type ConversationSummary = Conversation;
+
+export interface ConversationList {
+  conversations: Conversation[];
 }
 
 export function isTerminalJob(job: Pick<Job, "state">): boolean {

@@ -50,7 +50,7 @@ export class AuthError extends MitraError {
   }
 }
 
-/** 403: scope, workspace role or source access is insufficient. */
+/** 403: category `scope`, `workspace_role`, `workspace` or `source_access`. */
 export class PermissionError extends MitraError {
   constructor(message: string, init: MitraErrorInit) {
     super(message, init);
@@ -58,7 +58,7 @@ export class PermissionError extends MitraError {
   }
 }
 
-/** 402: out of credits or the member cap was reached. */
+/** 402: category `not_ready` (the workspace is out of credits) or `member_cap`. */
 export class CreditsError extends MitraError {
   constructor(message: string, init: MitraErrorInit) {
     super(message, init);
@@ -66,7 +66,7 @@ export class CreditsError extends MitraError {
   }
 }
 
-/** 409: the resource is busy; retry later. */
+/** 409: a conflict with the current state: revoking an invitation that is no longer open, answering a file that is not waiting for a decision, or a workspace already at its 20 webhooks. Read `category`, `code` and `message`. */
 export class BusyError extends MitraError {
   constructor(message: string, init: MitraErrorInit) {
     super(message, init);
@@ -76,7 +76,8 @@ export class BusyError extends MitraError {
 
 /**
  * 422 from creating a source: the connection test failed and nothing was
- * saved. `testResult` carries the test outcome from the response body.
+ * saved. `testResult` is the server's `detail.test` (`ok`, `message`,
+ * `error_category`, `field`, ...), or undefined.
  */
 export class SourceTestFailedError extends MitraError {
   readonly testResult: unknown;
@@ -143,13 +144,13 @@ function defaultCategory(status: number): string {
     case 401:
       return "auth";
     case 402:
-      return "credits";
+      return "not_ready";
     case 403:
       return "permission";
     case 404:
       return "not_found";
     case 409:
-      return "busy";
+      return "conflict";
     case 429:
       return "rate_limit";
     default:
@@ -236,8 +237,9 @@ export function errorFromResponse(status: number, headers: Headers, text: string
 }
 
 /**
- * Error mapper for `POST /sources`, where 422 means the connection test
- * failed and the body is the test result rather than a validation error.
+ * Error mapper for `POST /sources`, where 422 with a `detail` object means the
+ * connection test failed (`detail.test` is the test result), unlike a request
+ * validation 422 whose `detail` is an array.
  */
 export function sourceErrorFromResponse(status: number, headers: Headers, text: string): MitraError | undefined {
   if (status !== 422) return undefined;
@@ -249,18 +251,16 @@ export function sourceErrorFromResponse(status: number, headers: Headers, text: 
   }
   if (!isRecord(parsed)) return undefined;
   const detail = parsed["detail"];
-  if (Array.isArray(detail)) return undefined; // request validation, not a test result
-  const testResult: unknown = detail !== undefined ? detail : parsed;
-  const info = isRecord(testResult) ? testResult : {};
+  if (!isRecord(detail)) return undefined; // request validation, not a test result
   return new SourceTestFailedError(
-    typeof info["message"] === "string" ? info["message"] : "The connection test for this source failed",
+    typeof detail["message"] === "string" ? detail["message"] : "The connection test for this source failed",
     {
       status,
-      category: typeof info["category"] === "string" ? info["category"] : "source_test",
-      code: typeof info["code"] === "string" ? info["code"] : undefined,
+      category: typeof detail["category"] === "string" ? detail["category"] : "connection",
+      code: typeof detail["code"] === "string" ? detail["code"] : undefined,
       requestId: headers.get("x-request-id") ?? undefined,
       body: parsed,
-      testResult,
+      testResult: detail["test"],
     },
   );
 }

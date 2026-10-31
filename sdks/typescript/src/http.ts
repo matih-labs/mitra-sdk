@@ -30,6 +30,8 @@ export interface SendOptions {
   auth?: boolean;
   /** Generate an Idempotency-Key (reused across retries) unless one is given. */
   autoIdempotency?: boolean;
+  /** `manual` returns a 3xx response as is, instead of following it. */
+  redirect?: "manual";
   /** Leave a successful response body unread so it can be streamed. */
   stream?: boolean;
   request?: RequestOptions;
@@ -166,6 +168,7 @@ export class HttpClient {
     const maxRetries = opts.maxRetries ?? cfg.maxRetries;
     const timeoutMs = opts.timeoutMs ?? cfg.timeoutMs;
     const init: RequestInit = { method, headers, body };
+    if (o.redirect) init.redirect = o.redirect;
 
     for (let attempt = 0; ; attempt++) {
       let res: Response;
