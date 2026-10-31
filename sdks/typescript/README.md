@@ -5,7 +5,7 @@
 TypeScript client for the Mitra public API. Ask questions of your data in any of 22 Indian languages, generate Gems, render dashboards, run predictions, and manage sources, files, webhooks and members.
 
 - Node 18 or newer, ESM, no runtime dependencies beyond `openapi-fetch`
-- Typed errors, automatic retries, idempotency keys on every call that spends credits
+- Typed errors, automatic retries, an idempotency key on the two calls that spend credits (`ask`, `predictions.create`)
 - Server-sent-event streaming for answers
 - Webhook signature verification (constant-time)
 
@@ -72,7 +72,7 @@ for await (const { event, data } of mitra.askStream("Top 5 customers by revenue"
 }
 ```
 
-Events are `started`, `progress`, `answer` and `error`. An `error` event is yielded, not thrown. If the request itself fails (bad credential, no credits), the iterator throws a typed error before yielding anything.
+Events are `started`, `progress`, `answer` and `error`. An `error` event is yielded, not thrown. If the request itself fails (bad credential, workspace pool empty), the iterator throws a typed error before yielding anything.
 
 ### Voice questions
 
@@ -90,8 +90,10 @@ console.log(answer.heard?.transcript, answer.answer);
 
 Everything is promise-based. Long calls (`gems.generate`, `predictions.create`, `dashboards.image`, `sources.create`, `files.upload`) have two modes:
 
-- **Wait** (default): sends `Prefer: wait=N` (capped at what the server honours, 60 s, 120 s for sources) and, when the server answers `202` with a job, polls it until it finishes. `wait` is the total time in seconds (default 10 minutes for Gems, 5 for images, sources and files, 31 for predictions); running past it throws `JobTimeoutError` and the job keeps running.
-- **Background**: `{ background: true }` returns right away with the queued job (for `sources.create` and `files.upload`, whatever the server answered).
+- **Wait** (default): sends `Prefer: wait=N` (the server honours at most 60 s for jobs and 120 s for sources and files) and, when the answer is not final, keeps polling. `wait` is the total time in seconds (default 10 minutes for Gems, 5 for images, sources and files, 31 for predictions).
+  - Job calls (`gems.generate`, `dashboards.image`, `predictions.create`) poll `/jobs/{id}`. Running past `wait` throws `JobTimeoutError`; the job keeps running.
+  - Resource calls (`sources.create`, `files.upload`) poll the source or the file. Running past `wait` throws nothing: you get the source or file as it stands (for example `phase: "building"`), so check `readiness.can_ask` or `status`.
+- **Background**: `{ background: true }` returns right away. For job calls that is the queued job; for `sources.create` and `files.upload` it is whatever the server answered.
 
 ```ts
 const done = await mitra.predictions.create({ question: "Forecast Q4" }, { wait: 900, onProgress: (j) => console.log(j.state) });
@@ -141,7 +143,7 @@ Creating a source tests the connection first. A failed test saves nothing and th
 import { SourceTestFailedError } from "@matihlabs/mitra";
 
 try {
-  await mitra.sources.create({ config: { type: "postgres", host: "db.example.com" } });
+  await mitra.sources.create({ config: { connector_type: "postgres", display_name: "Orders DB", host: "db.example.com" } });
 } catch (err) {
   if (err instanceof SourceTestFailedError) console.error(err.testResult);
   else throw err;
@@ -154,10 +156,10 @@ Files (`files:read` to list and get; `files:write` to upload, answer a duplicate
 const file = await mitra.files.upload(await readFile("sales.csv"), {
   filename: "sales.csv",
   contentType: "text/csv",
-  onDuplicate: "replace",     // optional
+  onDuplicate: "ask",         // optional: "ask" (default) or "keep_both"
 });
-const status = await mitra.files.get(file.id);  // status, analysis_state, decision_required
-if (status.decision_required) await mitra.files.duplicate(file.id, "replace");
+const status = await mitra.files.get(file.id);  // status, decision_required, decision_options
+if (status.decision_required) await mitra.files.duplicate(file.id, "use_existing");  // or "keep_both", "cancel"
 await mitra.files.list();
 await mitra.files.delete(file.id);
 ```
@@ -171,8 +173,8 @@ const { members } = await mitra.members.list();
 await mitra.members.update(members[0].id, { role: "admin" });
 await mitra.members.remove(members[1].id);
 
-await mitra.invitations.create({ email: "teammate@example.com", role: "member" });
-await mitra.invitations.create({ phone: "+910000000000", role: "member" });
+await mitra.invitations.create({ email: "teammate@example.com", role: "user" });
+await mitra.invitations.create({ phone: "+910000000000", role: "user" });
 const { invitations } = await mitra.invitations.list();
 await mitra.invitations.revoke(invitations[0].id);
 ```
@@ -217,7 +219,7 @@ app.post("/hooks/mitra", express.raw({ type: "application/json" }), (req, res) =
 
 - `429` is retried, honouring `Retry-After` (a wait longer than 60 seconds is surfaced as a `RateLimitError` instead).
 - `5xx` and network failures are retried for `GET`, `PUT` and `DELETE`, and for any call that carries an idempotency key.
-- Calls that spend credits (`ask`, `askStream`, `askAudio`, `predictions.create`, `gems.generate`, `dashboards.image`) send an `Idempotency-Key` automatically. The same key is reused across internal retries, so a retry is never charged twice. Pass `{ idempotencyKey }` to supply your own.
+- `ask` and `predictions.create` send an `Idempotency-Key` automatically. The same key is reused across internal retries, so a retry is never charged twice. The server honours the key on these two calls only. Pass `{ idempotencyKey }` to supply your own.
 - `maxRetries` defaults to 2; set it per client or per call. Retries use exponential backoff with jitter.
 
 ## Errors
@@ -227,9 +229,9 @@ Every API failure is a `MitraError` with `status`, `category`, `code`, `message`
 | Class | When |
 | --- | --- |
 | `AuthError` | 401 |
-| `CreditsError` | 402 (`credits`, `member_cap`) |
+| `CreditsError` | 402 (`not_ready`, `member_cap`) |
 | `PermissionError` | 403 (`scope`, `workspace_role`, `source_access`) |
-| `BusyError` | 409 |
+| `BusyError` | 409, a conflict with the current state (category `conflict`) |
 | `RateLimitError` | 429, with `retryAfter` in seconds |
 | `SourceTestFailedError` | 422 from `sources.create`, with `testResult` |
 | `JobFailedError` | a job failed or was cancelled, with `job` |
