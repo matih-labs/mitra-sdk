@@ -6,12 +6,12 @@
 //   java MatihExample.java --skip-predict
 //   java MatihExample.java --background     (predict without Prefer: wait, start a job and poll it)
 //   java MatihExample.java --upload ./sales.csv
-//   java MatihExample.java --invite teammate@example.com --role ROLE   (admin action, never runs by default)
+//   java MatihExample.java --invite teammate@example.com --role user   (admin action, never runs by default)
 //
 // Environment:
 //   MATIH_API_KEY       required. Create one under Settings › API & MCP in Matih.
 //   MATIH_BASE_URL      optional. Default https://workspace.matih.ai ("/api/v1" is appended).
-//   MATIH_ON_DUPLICATE  optional. Passed as the on_duplicate form field of the file upload.
+//   MATIH_ON_DUPLICATE  optional. The on_duplicate form field of the file upload: ask (default) or keep_both.
 //
 // Output goes through java.util.logging (to stderr, message only), so nothing needs a library.
 // JSON handling here is deliberately tiny (regex field extraction) so the file has no
@@ -119,7 +119,7 @@ public class MatihExample {
 
     /**
      * One request. On a 429 it honours Retry-After once and retries with the same
-     * Idempotency-Key, so a credit-costing call is never charged twice.
+     * Idempotency-Key (the server honours it on /ask and /predictions).
      * prefer is an optional RFC 7240 Prefer header value: "wait=30" or "respond-async".
      * Returns status and body of a 2xx answer; throws ApiException otherwise.
      */
@@ -302,8 +302,8 @@ public class MatihExample {
     // (3) Dashboard image job
     // -----------------------------------------------------------------------
     // Sync-with-fallback: wait=N, and if the job is still running, poll GET /jobs/{id}
-    // with a growing delay. image_url is a signed URL valid for about 15 minutes that
-    // needs no Authorization header.
+    // with a growing delay. image_url is a public, unguessable URL that expires after
+    // 15 minutes and needs no Authorization header.
     static void dashboardImage() throws IOException, InterruptedException, ApiException {
         String dashboards = get("/dashboards");
         String dashboardId = field(dashboards, "id"); // first dashboard in the list
@@ -320,14 +320,13 @@ public class MatihExample {
     // -----------------------------------------------------------------------
     // (4) Predict
     // -----------------------------------------------------------------------
-    // A prediction can run for up to 30 minutes. Poll every 5 to 10 seconds.
-    // Webhooks (prediction.completed) avoid polling.
+    // A prediction usually takes one to five minutes; the server gives up after 30.
+    // Poll every 5 to 10 seconds. Webhooks (prediction.completed) avoid polling.
+    // A finished prediction's result is {conversation_id, answer}; answer is a string.
     private static void printPrediction(String result) {
         LOG.info("answer: " + field(result, "answer"));
-        String image = field(result, "image_url");
-        if (image != null) {
-            LOG.info("image_url: " + image);
-        }
+        LOG.info("conversation_id: " + field(result, "conversation_id")
+                + " (pass it to POST /predictions to continue)");
     }
 
     /** Sync-with-fallback: wait=N, then poll on 202. */
@@ -360,11 +359,12 @@ public class MatihExample {
         String body = get("/sources");
         List<String> ids = fields(body, "id");
         List<String> names = fields(body, "name");
-        List<String> types = fields(body, "type");
-        List<String> statuses = fields(body, "status");
+        List<String> types = fields(body, "connector_type");
+        List<String> states = fields(body, "state");
+        List<String> active = fields(body, "is_active");
         for (int i = 0; i < ids.size(); i++) {
-            LOG.info("  " + ids.get(i) + "  " + at(names, i) + "  type=" + at(types, i)
-                    + "  status=" + at(statuses, i));
+            LOG.info("  " + ids.get(i) + "  " + at(names, i) + "  connector_type=" + at(types, i)
+                    + "  state=" + at(states, i) + "  active=" + at(active, i));
         }
         if (ids.isEmpty()) {
             LOG.info("no sources yet");
@@ -374,8 +374,8 @@ public class MatihExample {
     // -----------------------------------------------------------------------
     // (6) Upload a CSV or Excel file (multipart, field name "file")
     // -----------------------------------------------------------------------
-    // Needs the files:write scope. The optional on_duplicate field says what to do
-    // when the same file was uploaded before. The multipart body is built by hand.
+    // Needs the files:write scope. The optional on_duplicate field is "ask" (the default:
+    // an identical file waits for a decision) or "keep_both". The multipart body is built by hand.
     static void uploadFile(String pathArg) throws IOException, InterruptedException, ApiException {
         Path path = Paths.get(pathArg);
         byte[] content = Files.readAllBytes(path);
@@ -395,23 +395,32 @@ public class MatihExample {
         out.write(content);
         write(out, "\r\n--" + boundary + "--\r\n");
 
-        String uploaded = call("POST", "/files", out.toByteArray(), "multipart/form-data; boundary=" + boundary, null);
+        // A file is a File, not a Job. "Prefer: wait=30" (up to 120) holds the request until
+        // it is ready; if processing is still running the answer is 202.
+        String uploaded = callFull("POST", "/files", out.toByteArray(),
+                "multipart/form-data; boundary=" + boundary, null, "wait=30").body;
         String id = field(uploaded, "id");
-        String status = field(uploaded, "status");
-        LOG.info("uploaded: " + id + " status=" + status);
+        LOG.info("uploaded: " + id + " status=" + field(uploaded, "status") + " ready=" + field(uploaded, "ready"));
 
-        // Processing is asynchronous. Needs the files:read scope to follow it.
+        // Follow it with GET /files/{id} (needs files:read) until Ask can use it, it needs
+        // attention or failed, or it waits for a duplicate decision.
         String latest = uploaded;
-        for (int i = 0; i < 40 && "processing".equals(status); i++) {
+        for (int i = 0; i < 40 && !fileSettled(latest); i++) {
             Thread.sleep(3000);
             latest = get("/files/" + id);
-            status = field(latest, "status");
-            LOG.info("  status=" + status);
+            LOG.info("  status=" + field(latest, "status") + " ready=" + field(latest, "ready"));
         }
         LOG.info(latest);
         if ("true".equals(field(latest, "decision_required"))) {
-            LOG.info("the file needs a decision (duplicate handling); see POST /files/{id}/duplicate");
+            LOG.info("the file is a duplicate and waits for a decision (see decision_options above:"
+                    + " use_existing, keep_both or cancel); send it to POST /files/{id}/duplicate");
         }
+    }
+
+    private static boolean fileSettled(String file) {
+        String status = field(file, "status");
+        return "true".equals(field(file, "ready")) || "true".equals(field(file, "decision_required"))
+                || "needs_attention".equals(status) || "failed".equals(status);
     }
 
     private static String contentTypeFor(String filename) {
@@ -435,7 +444,7 @@ public class MatihExample {
     // -----------------------------------------------------------------------
     // (7) Invite a member (admin action, members:manage)
     // -----------------------------------------------------------------------
-    // Only runs when you pass --invite. Valid role values come from GET /members.
+    // Only runs when you pass --invite. role is viewer, user or admin (never owner).
     static void inviteMember(String target, String role) throws IOException, InterruptedException, ApiException {
         String key = target.contains("@") ? "email" : "phone";
         String body = "{\"" + key + "\":" + quote(target) + ",\"role\":" + quote(role) + "}";
@@ -598,9 +607,10 @@ public class MatihExample {
         }
         final String uploadPath = flag(args, "--upload");
         final String inviteTarget = flag(args, "--invite");
-        final String inviteRole = flag(args, "--role");
-        if (inviteTarget != null && inviteRole == null) {
-            LOG.severe("--invite needs --role ROLE (valid values come from GET /members)");
+        final String roleFlag = flag(args, "--role");
+        final String inviteRole = roleFlag == null ? "user" : roleFlag;
+        if (inviteTarget != null && !List.of("viewer", "user", "admin").contains(inviteRole)) {
+            LOG.severe("--role must be viewer, user or admin");
             System.exit(2);
         }
 
