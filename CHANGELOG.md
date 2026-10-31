@@ -1,26 +1,36 @@
 # Changelog
 
-All notable changes are listed here. Python and TypeScript SDKs are versioned independently
-(tags `py-v*` and `ts-v*`).
+All notable changes are listed here. The Python and TypeScript SDKs share one version and are
+released together: one tag `vX.Y.Z` publishes `mitra-sdk` to PyPI and `@matihlabs/mitra` to npm.
 
-## Unreleased
+## 0.1.0 - 2026-10-31
 
-- Python SDK `mitra-sdk` (sync and async clients, pydantic models, SSE streaming, job polling,
-  webhook signature verification).
-- TypeScript SDK `@matihlabs/mitra` (typed client, SSE async iterator, job polling, webhook
-  signature verification).
-- Admin surface in both SDKs: members, invitations, sources (get, activate, delete), files
-  (list, duplicate decision, delete), webhook test and deliveries, voice `heard`.
-- Agent skill `skills/matih`, MCP connection guide, curl recipes, Slack bot example.
-- OpenAPI sync workflow and CI.
-- Scopes: 13 in total. Files now use `files:read` (`GET /files`, `GET /files/{id}`) and
-  `files:write` (`POST /files`, `POST /files/{id}/duplicate`, `DELETE /files/{id}`) instead of
-  `sources:read` and `sources:write`.
-- Docs: admins create keys under `Settings › API & MCP`, choose the products a key may use (all on
-  by default) and revoke keys there. Keys never expire by default. Two kinds: an API key (all of
-  `/api/v1`) and an MCP connector key (only `/api/v1/mcp`, 403 elsewhere).
-- Sync and async everywhere: `Prefer: wait=N` and `Prefer: respond-async` supported by the API.
-  Both SDKs: every long call (`gems.generate`, `predictions.create`, `dashboards.image`,
-  `sources.create`, `files.upload`) takes `wait` (seconds) or `background`; `ask` takes
-  `background`; `jobs.wait(job, timeout)` polls; `Job.as_answer()` in Python. Python keeps `Mitra`
-  and `AsyncMitra` at full parity.
+First release. The Matih public API (`/api/v1`) is rolling out to `workspace.matih.ai` now; these
+SDKs target it, and a call against a workspace it has not reached yet fails.
+
+- Python SDK `mitra-sdk` (`Mitra` and `AsyncMitra`, pydantic models, SSE streaming, job polling,
+  webhook signature verification) and TypeScript SDK `@matihlabs/mitra` (typed client, SSE async
+  iterator, job polling, webhook signature verification).
+- Covers ask (text, voice, streaming), conversations, Gems, dashboards, predictions, jobs,
+  workspaces (`PUT /me/workspace`), members, invitations, connectors, sources, files and webhooks.
+- Configuration is the same everywhere: `MATIH_API_KEY` (or `MATIH_ACCESS_TOKEN` for an OAuth
+  token) and `MATIH_BASE_URL`, which is the host only (default `https://workspace.matih.ai`). The
+  SDKs append `/api/v1`.
+- Sync and async: `Prefer: wait=N` and `Prefer: respond-async`, answered with `Preference-Applied`.
+  - Job calls (`gems.generate`, `dashboards.image`, `predictions.create`, `ask` with
+    `background`) send `Prefer: wait=N` (N at most 60) and poll the job; `background` returns the
+    queued job.
+  - Resource calls (`sources.create`, `files.upload`) are not jobs: `Prefer: wait=N` (N at most
+    120), then the SDK polls `GET /sources/{id}` or `GET /files/{id}`. If `wait` runs out the
+    resource comes back as it stands.
+- Errors use the server's envelope `{"detail": {"category", "message", "code"?}}`. A failed
+  connection test on `sources.create` raises `SourceTestFailedError` with `detail.test`.
+- Scopes: 13 in total. Files use `files:read` and `files:write`.
+- Idempotency-Key is sent on `ask` and `predictions.create` only; the other routes take none.
+- Webhooks: `Matih-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over `<t>.<raw body>` keyed with the
+  whole `whsec_...` secret, 300 second tolerance. `verify_webhook` / `verifyWebhook` check it.
+- Admins create keys under `Settings › API & MCP`, choose the products a key may use and revoke
+  keys there. Two kinds: an API key (all of `/api/v1`) and an MCP connector key (only
+  `/api/v1/mcp`).
+- Agent skill `skills/matih`, MCP connection guide, curl and plain-HTTP examples in six languages,
+  Slack bot example, OpenAPI sync workflow and CI.

@@ -12,6 +12,6 @@ Thanks for helping. This repository holds client-side code only; the API itself 
 - **Keep both SDKs aligned.** A new method belongs in the Python and the TypeScript client
   with the same name and behaviour.
 - **No secrets, no customer data.** Examples and tests use fake keys such as `mtk_test`.
-- **Releases:** tag `py-vX.Y.Z` or `ts-vX.Y.Z` after bumping the version and CHANGELOG.
+- **Releases:** bump both package versions (`sdks/python/pyproject.toml`, `_version.py`, `sdks/typescript/package.json`, `version.ts`) and the CHANGELOG, then push the tag `vX.Y.Z`. One tag publishes both packages; each job refuses a tag that does not match its version.
 
 By contributing you agree your work is licensed under Apache-2.0.
