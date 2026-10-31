@@ -369,7 +369,7 @@ The client retries up to `maxRetries` times (default 2), waiting for `Retry-Afte
 | Network error or timeout | Same rule as `5xx` |
 | Other `4xx` | Never |
 
-`ask`, `askStream`, `askAudio` and `predictions.create` generate an `Idempotency-Key` (once per call, shared by its retries). The server honours the key on `POST /ask` and `POST /predictions` only, so on those two a retry answers once and is charged once. Pass `idempotencyKey` to choose it yourself, for example to survive a process restart. Use a fresh key for a new logical request. Other `POST` calls (such as `sources.create` or `gems.generate`) are not retried on `5xx`, because repeating them could do the work twice.
+`ask`, `askStream` and `predictions.create` generate an `Idempotency-Key` (once per call, shared by its retries). The server honours the key on `POST /ask` and `POST /predictions` only, so on those two a retry answers once and is charged once. Pass `idempotencyKey` to choose it yourself, for example to survive a process restart. Use a fresh key for a new logical request. Other `POST` calls (such as `sources.create` or `gems.generate`) are not retried on `5xx`, because repeating them could do the work twice.
 
 ## Errors
 
@@ -380,7 +380,7 @@ Every API failure throws a subclass of `MitraError`, chosen from the HTTP status
 | `AuthError` | 401 | `authentication` | |
 | `CreditsError` | 402 | `not_ready`, `member_cap` | |
 | `PermissionError` | 403 | `scope`, `workspace_role`, `source_access` | |
-| `BusyError` | 409 | `busy` | |
+| `BusyError` | 409 | `conflict` | |
 | `SourceTestFailedError` | 422 from `sources.create` | `connection` | `testResult` |
 | `RateLimitError` | 429 | `rate_limit` | `retryAfter` (seconds) |
 | `ConnectionError` | 0 | `network`, `timeout` | `cause` |

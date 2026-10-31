@@ -75,7 +75,7 @@ Every endpoint method also accepts these keyword arguments, which override the c
 |---|---|
 | `workspace_id=` | Sends `X-Matih-Workspace` for this call. |
 | `language=` | Sends `Accept-Language` for this call. |
-| `idempotency_key=` | Sets the `Idempotency-Key` header on calls that cost credits. |
+| `idempotency_key=` | Sets the `Idempotency-Key` header. The server honours it on `ask` and `predictions.create` only. |
 
 ```python
 client.sources.list(workspace_id="ws_456")
@@ -426,7 +426,7 @@ The client retries for you, up to `max_retries` times (default 2), with the dela
 | Network errors | Same rule as above |
 | Other statuses, including `500` | Never |
 
-`ask`, `ask_stream`, `ask_audio` and `predictions.create` send an `Idempotency-Key` automatically (a fresh UUID per call, reused across that call's retries). The server honours the key on `POST /ask` and `POST /predictions` only, so on those two a retry answers once and is charged once (`ask_audio` sends one too, which is harmless). Pass `idempotency_key=` to set your own, for example to survive a process restart:
+`ask`, `ask_stream` and `predictions.create` send an `Idempotency-Key` automatically (a fresh UUID per call, reused across that call's retries). The server honours the key on `POST /ask` and `POST /predictions` only, so on those two a retry answers once and is charged once. Pass `idempotency_key=` to set your own, for example to survive a process restart:
 
 ```python
 client.predictions.create("Forecast Q4 revenue", idempotency_key="report-2026-q4")
@@ -443,7 +443,7 @@ Every API error derives from `MitraError`. The class is chosen from the HTTP sta
 | `AuthError` | 401 | | |
 | `CreditsError` | 402 | `not_ready`, `member_cap` | |
 | `PermissionDeniedError` | 403 | `scope`, `workspace_role`, `source_access` | |
-| `BusyError` | 409 | `busy` | |
+| `BusyError` | 409 | `conflict` | |
 | `SourceTestFailedError` | 422 from `sources.create` | `connection` | `test_result` |
 | `RateLimitError` | 429 | `rate_limit` | `retry_after` (seconds, or `None`) |
 | `JobFailedError` | job `failed` or `cancelled` | | `job` |
