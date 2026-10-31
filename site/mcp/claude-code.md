@@ -19,7 +19,7 @@ The shell expands `$MATIH_API_KEY` when you run the command, so the key is store
 claude mcp add --transport http matih https://workspace.matih.ai/api/v1/mcp
 ```
 
-Then run `/mcp` inside Claude Code and choose **Authenticate** for `matih`. A browser opens; sign in to Matih and approve. You act as yourself, in your current workspace.
+Then run `/mcp` inside Claude Code and choose **Authenticate** for `matih`. A browser opens; sign in to Matih and approve. You act as yourself, in the default workspace you choose on the consent screen. To disconnect later, use Settings › Connected apps in Matih.
 
 ## Scope of the config
 

@@ -18,7 +18,7 @@ Matih hosts a [Model Context Protocol](https://modelcontextprotocol.io) server s
 |---|---|---|
 | **MCP connector key** (`mtk_...`, kind "MCP connector") | Headless agents, CI, shared team setups. Accepted **only** on `/api/v1/mcp`, never on the REST routes, so a leaked connector key cannot call the rest of the API. | Pinned to the workspace it was made in. |
 | **API key** (`mtk_...`, kind "API key") | Works on MCP as well as all of `/api/v1`. Prefer a connector key if the key is only for an assistant. | Pinned. |
-| **OAuth** (`mto_...`) | Interactive clients. You sign in once in the browser; the client discovers the sign-in from the `401`'s `WWW-Authenticate` header and the well-known metadata, and registers itself. Acts as you. | Your current workspace; the `use_workspace` tool changes it, and `X-Matih-Workspace` picks one per request. |
+| **OAuth** (`mto_...`) | Interactive clients. You sign in once in the browser; the client discovers the sign-in from the `401`'s `WWW-Authenticate` header and the well-known metadata, and registers itself ([how OAuth works](../guides/oauth.md)). Acts as you; tokens last 1 hour and renew by refresh, and you approve again after 90 days. Disconnect an app any time under Settings › Connected apps. | The default workspace you pick on the consent screen (else your current one); the `use_workspace` tool changes it, and `X-Matih-Workspace` picks one per request. |
 
 !!! tip "Let the app write the config for you"
     Settings › API & MCP shows ready-to-copy configs for Claude Code, Claude Desktop, Cursor and VS Code, with your workspace's address and the new key filled in, and only the products you enabled. The pages in this section give the same configs by hand.

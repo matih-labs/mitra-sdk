@@ -11,7 +11,7 @@ A person can belong to several workspaces (their own, their company's, a client'
 | Credential | Workspace |
 |---|---|
 | `mtk_` API key or MCP connector | **Pinned** to the workspace the key was made in. A different `X-Matih-Workspace` header is refused. |
-| `mto_` OAuth access token | The `X-Matih-Workspace` header on the request, else the person's current workspace (set with `PUT /me/workspace`). |
+| `mto_` OAuth access token | The `X-Matih-Workspace` header on the request, else the person's default workspace (picked on the consent screen, changed with `PUT /me/workspace`). |
 
 So a single-workspace integration, such as a company Slack bot, should use an API key and never think about this. A multi-user app that signs people in with OAuth needs to ask which workspace each person wants. See [OAuth for multi-user apps](oauth.md).
 
