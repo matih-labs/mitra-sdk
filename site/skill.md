@@ -52,8 +52,8 @@ claude mcp add --transport http matih https://workspace.matih.ai/api/v1/mcp \
   --header "Authorization: Bearer $MATIH_API_KEY"
 ```
 
-or give the agent `MATIH_API_KEY` in its environment so it can use REST. Use an **MCP connector** key for
-the first and an **API key** for the second (see [Credentials and products](concepts/credentials.md)).
+or give the agent `MATIH_API_KEY` in its environment so it can use REST. Prefer an **MCP connector** key for
+the first (it only works on `/api/v1/mcp`; an API key works there too) and an **API key** for the second (see [Credentials and products](concepts/credentials.md)).
 
 ## Keep the agent safe
 
