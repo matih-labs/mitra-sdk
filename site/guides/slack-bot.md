@@ -130,14 +130,13 @@ def on_clarify(ack, body, action, client):
 A prediction can take up to 30 minutes, longer than Slack will hold a command open. The bot starts the job, posts a placeholder, then waits in a thread and updates the placeholder:
 
 ```python
-job = self.matih.predictions.create(question)              # 202 Job
+job = self.matih.predictions.create(question, background=True)   # the queued Job, at once
 posted = slack.chat_postMessage(channel=channel, text="Forecast started. I will update this message.")
 
 def finish():
     done = self.matih.jobs.wait(job)                       # polls with backoff
-    result = done.result or {}
+    result = done.result or {}                             # {conversation_id, answer}
     slack.chat_update(channel=channel, ts=posted["ts"], text=result.get("answer") or "Forecast ready.")
-    # result.get("image_url") is the chart
 
 threading.Thread(target=finish, daemon=True).start()
 ```
@@ -159,7 +158,7 @@ More in [Dashboard image previews](dashboard-previews.md) and [Gems feed](gems-f
 
 ### Errors are one friendly line
 
-Every Matih call sits in `try/except MitraError` and the message goes to the channel through `fmt.error_text`. The SDK's typed errors let you say something useful: `CreditsError` (402, tell an admin), `PermissionDeniedError` (403, a product is switched off for the key), `RateLimitError` (429, the SDK already waited and retried), `BusyError` (409, the conversation is mid-request). See [Errors](../concepts/errors.md).
+Every Matih call sits in `try/except MitraError` and the message goes to the channel through `fmt.error_text`. The SDK's typed errors let you say something useful: `CreditsError` (402, tell an admin), `PermissionDeniedError` (403, a product is switched off for the key), `RateLimitError` (429, the SDK already waited and retried), `BusyError` (409, for example a prediction is still running in that conversation). See [Errors](../concepts/errors.md).
 
 ## Per-user mode with OAuth
 
