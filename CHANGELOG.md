@@ -1,7 +1,31 @@
 # Changelog
 
 All notable changes are listed here. The Python and TypeScript SDKs share one version and are
-released together: one tag `vX.Y.Z` publishes `mitra-sdk` to PyPI and `@matihlabs/mitra` to npm.
+released together: one tag `vX.Y.Z` publishes `mitra-sdk` to PyPI and `@matihlabs/mitra` and
+`@matihlabs/embed` to npm.
+
+## Unreleased
+
+Embeds: show a dashboard or a Gems feed inside your own product. Contract: `docs/EMBEDS.md` in
+matih-labs/mitra.
+
+- Python `client.embeds.create(resource=, filters=, origins=, ttl_seconds=)`, `.list()` and
+  `.revoke(id)` on `Mitra` and `AsyncMitra` (`list` returns `{embeds: [...]}` with `kind`, `resource`,
+  `title`, `origins`, `created_at`, `expires_at`, `revoked_at`, `key` and `member`), and TypeScript `mitra.embeds.create/list/revoke`.
+  Typed `Embed` (the `met_` token is kept out of `repr`), `embed_src` / `embedSrc` (the iframe URL
+  without its `#token=` fragment). Minting is not idempotent: no `Idempotency-Key`, and never
+  retried after a 5xx.
+- A 422 on the embeds routes raises `EmbedRefusedError` with `code` one of `missing_parameter`,
+  `unknown_parameter`, `invalid_value`, `invalid_origin`, `filters_not_supported`,
+  `no_embed_parameters`; a 404 raises `EmbedNotFoundError`.
+- New scopes `embeds:create` (mint, revoke) and `embeds:read` (list), and an Embeds product.
+- New npm package `@matihlabs/embed`: the `<matih-embed>` web component. Token only in the URL
+  fragment, `sandbox="allow-scripts allow-same-origin"`, `referrerpolicy="no-referrer"`, answers
+  `matih:token-expiring` only from the iframe's own window and origin and replies to that exact
+  origin, never `"*"`. Follows the embed page's `matih:resize` height (taken only from its own
+  frame and origin, capped), with `height` as the initial value. Emits `matih:ready` and
+  `matih:error`. It joins the release workflow.
+- `examples/embed/`: a Node (`node:http`) and a Python example that mint and show an embed.
 
 ## 0.1.0 - 2026-10-31
 

@@ -441,3 +441,75 @@ class StreamEvent(_Model):
     def as_answer(self) -> Answer:
         """Parse an ``answer`` event's data as an :class:`Answer`."""
         return Answer.model_validate(self.data)
+
+
+class EmbedResource(_Model):
+    """What an embed shows: ``type`` is ``dashboard`` or ``gems``. For ``gems``, ``id`` is the
+    source (connection) id."""
+
+    type: str
+    id: str
+
+
+def embed_src(url: str) -> str:
+    """The embed URL without its fragment, which is where the token lives. This is the value
+    for the ``src`` attribute of ``<matih-embed>``; it keeps the ``?e=`` token id the frame
+    check needs."""
+    return url.split("#", 1)[0]
+
+
+class Embed(_Model):
+    """A minted embed token (``embeds.create``).
+
+    ``token`` (``met_...``) is a short-lived secret, valid only for the one resource, filters
+    and origins you asked for, and is never shown again. It is left out of ``repr`` on
+    purpose, as is ``url`` (its fragment carries the token): do not log either. ``id``
+    (``emt_...``) is not secret; it is what ``embeds.revoke`` takes.
+    """
+
+    id: str
+    token: str = Field(repr=False)
+    expires_at: str
+    url: str = Field(repr=False)
+    resource: EmbedResource
+    origins: list[str] = Field(default_factory=list)
+
+    @property
+    def src(self) -> str:
+        """``url`` without the token: the ``src`` for ``<matih-embed>``."""
+        return embed_src(self.url)
+
+
+class EmbedKey(_Model):
+    """The API key (or OAuth grant) that minted a token."""
+
+    integration_id: str | None = None
+    key_prefix: str | None = None
+    integration_name: str | None = None
+
+
+class EmbedMember(_Model):
+    """The member the minting key acts as."""
+
+    user_id: str | None = None
+    name: str | None = None
+
+
+class EmbedSummary(_Model):
+    """One token minted by this key, as ``embeds.list`` shows it. Never carries the secret or
+    the filter values. ``revoked_at`` is None while the token has not been revoked."""
+
+    id: str
+    kind: str | None = None
+    resource: EmbedResource | None = None
+    title: str | None = None
+    origins: list[str] = Field(default_factory=list)
+    created_at: str | None = None
+    expires_at: str | None = None
+    revoked_at: str | None = None
+    key: EmbedKey | None = None
+    member: EmbedMember | None = None
+
+
+class EmbedList(_Model):
+    embeds: list[EmbedSummary] = Field(default_factory=list)

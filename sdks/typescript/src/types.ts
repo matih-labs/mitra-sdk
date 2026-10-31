@@ -597,6 +597,64 @@ export interface CreateInvitationParams {
   whatsappOnly?: boolean;
 }
 
+/** `dashboard`, or `gems` (then the `id` is the source, i.e. connection, id). */
+export type EmbedResourceType = "dashboard" | "gems";
+
+export interface EmbedResource {
+  type: EmbedResourceType;
+  id: string;
+}
+
+/**
+ * A minted embed token. `token` (`met_...`) is a short-lived secret for the one resource,
+ * filters and origins you asked for; it is never shown again. `id` (`emt_...`) is not secret
+ * and is what `embeds.revoke` takes. `url` carries the token in its fragment: pass
+ * `embedSrc(embed)` (the URL without it) and `embed.token` to `<matih-embed>`, and do not
+ * log this object.
+ */
+export interface Embed {
+  id: string;
+  token: string;
+  expires_at: string;
+  url: string;
+  resource: EmbedResource;
+  origins: string[];
+}
+
+/** A token minted by this key, as `embeds.list` shows it. Never carries the secret or filter values. */
+export interface EmbedSummary {
+  id: string;
+  kind?: string;
+  resource?: EmbedResource | null;
+  title?: string | null;
+  origins?: string[];
+  created_at?: string | null;
+  expires_at?: string | null;
+  /** When it was revoked; null while it has not been. */
+  revoked_at?: string | null;
+  /** The API key (or OAuth grant) that minted it. */
+  key?: { integration_id?: string; key_prefix?: string; integration_name?: string } | null;
+  /** The member that key acts as. */
+  member?: { user_id?: string; name?: string } | null;
+}
+
+export interface EmbedList {
+  embeds: EmbedSummary[];
+}
+
+export interface CreateEmbedParams {
+  resource: EmbedResource;
+  /**
+   * 1 to 10 exact origins allowed to frame the page: `https://app.example.com` (https only,
+   * except `http://localhost[:port]` and `http://127.0.0.1[:port]`; no paths or wildcards).
+   */
+  origins: string[];
+  /** The viewer's row filters: exactly the parameters the dashboard declares. Gems take none. */
+  filters?: Record<string, string | number>;
+  /** 60 to 900, default 300. A token is never renewed: mint a new one. */
+  ttlSeconds?: number;
+}
+
 export interface ConversationMessage {
   id: string;
   role: string;
@@ -627,4 +685,14 @@ export interface ConversationList {
 
 export function isTerminalJob(job: Pick<Job, "state">): boolean {
   return job.state === "succeeded" || job.state === "failed" || job.state === "cancelled";
+}
+
+/**
+ * The embed URL without its fragment, which is where the token lives. This is the value for
+ * the `src` attribute of `<matih-embed>`; it keeps the `?e=` token id the frame check needs.
+ */
+export function embedSrc(embed: Embed | string): string {
+  const url = typeof embed === "string" ? embed : embed.url;
+  const hash = url.indexOf("#");
+  return hash === -1 ? url : url.slice(0, hash);
 }

@@ -6,7 +6,7 @@ Every request carries `Authorization: Bearer <credential>`. There are two creden
 
 - Created by a workspace admin in Matih under `Settings › API & MCP`.
 - Two kinds: an API key works on all of `/api/v1`; an MCP connector key works only on `/api/v1/mcp*` and is refused with 401 elsewhere. Use a connector key for MCP clients (an API key also works there).
-- The admin chooses the products the key may use, all on by default: Ask, Data sources, Files, Predictive, Dashboards, Gems, Workspaces, Users & members, Webhooks. Each product left off removes its scopes, and those calls return 403 `scope`.
+- The admin chooses the products the key may use, all on by default: Ask, Data sources, Files, Predictive, Dashboards, Gems, Embeds, Workspaces, Users & members, Webhooks. Each product left off removes its scopes, and those calls return 403 `scope`.
 - Keys never expire by default (an admin can set 30 days, 90 days, 1 year or a date). Revoke or rotate them in the same screen. Rotating lets the old key run for an overlap (24 hours by default) so you can switch without a gap.
 - Pinned to exactly one workspace. Sending an `X-Matih-Workspace` header for a different workspace is refused (403, category `workspace`).
 - Act as the member who created the key and never exceed that member's role. The member is checked on every request: a key made by someone who has since been removed or demoted stops working. A scope only narrows; a key made by a `user` cannot do admin-only things even if it holds the scope.
@@ -45,6 +45,8 @@ curl -s -H "Authorization: Bearer $MATIH_API_KEY" https://workspace.matih.ai/api
 | `ask` | ask questions (text and audio), read conversations |
 | `dashboards:read` | list and read dashboards and render images |
 | `predict` | run predictions |
+| `embeds:create` | mint and revoke embed tokens (`POST /embeds`, `DELETE /embeds/{id}`) |
+| `embeds:read` | list the embed tokens this key minted (`GET /embeds`) |
 | `webhooks:manage` | create, list, test, delete webhooks and read deliveries |
 
 Polling and cancelling a job (`GET /jobs/{id}`, `POST /jobs/{id}/cancel`) needs `workspaces:read` plus the scope of the job's kind (`ask`, `gems:generate`, `predict` or `dashboards:read`); a job the credential has no scope for, or one that belongs to someone else, is a 404. A missing scope returns 403 with category `scope`. A scope only narrows: the member's workspace role is checked first.

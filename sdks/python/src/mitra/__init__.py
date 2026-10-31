@@ -3,9 +3,12 @@
 from ._version import __version__
 from .client import AsyncMitra, Mitra
 from .errors import (
+    EMBED_REFUSAL_CODES,
     AuthError,
     BusyError,
     CreditsError,
+    EmbedNotFoundError,
+    EmbedRefusedError,
     JobFailedError,
     JobTimeoutError,
     MitraError,
@@ -27,6 +30,12 @@ from .models import (
     Dashboard,
     DashboardList,
     DashboardWidget,
+    Embed,
+    EmbedKey,
+    EmbedList,
+    EmbedMember,
+    EmbedResource,
+    EmbedSummary,
     File,
     FileList,
     Gem,
@@ -51,10 +60,12 @@ from .models import (
     Workspace,
     WorkspaceInvitation,
     WorkspaceList,
+    embed_src,
 )
 from .webhooks import assert_webhook, verify_webhook
 
 __all__ = [
+    "EMBED_REFUSAL_CODES",
     "Answer",
     "AsyncMitra",
     "AuthError",
@@ -71,6 +82,14 @@ __all__ = [
     "Dashboard",
     "DashboardList",
     "DashboardWidget",
+    "Embed",
+    "EmbedKey",
+    "EmbedList",
+    "EmbedMember",
+    "EmbedNotFoundError",
+    "EmbedRefusedError",
+    "EmbedResource",
+    "EmbedSummary",
     "File",
     "FileList",
     "Gem",
@@ -104,6 +123,7 @@ __all__ = [
     "WorkspaceInvitation",
     "WorkspaceList",
     "assert_webhook",
+    "embed_src",
     "verify_webhook",
     "__version__",
 ]

@@ -1,0 +1,19 @@
+{
+  "name": "matih-embed-example",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Mint a Matih embed token on your backend and show it with <matih-embed>.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@matihlabs/embed": "file:../../../sdks/embed",
+    "@matihlabs/mitra": "file:../../../sdks/typescript"
+  }
+}
