@@ -20,6 +20,7 @@ import type {
   ConnectorList,
   AddEmbedSigningKeyParams,
   CreateEmbedParams,
+  EmbedOrigins,
   EmbedSigningKey,
   EmbedSigningKeyList,
   CreateInvitationParams,
@@ -780,12 +781,50 @@ class EmbedKeysApi {
   }
 }
 
+/**
+ * The origins your own signed tokens may be framed by (`/embeds/origins`). Needs `embeds:create`.
+ * The page URL of a token you sign carries only your integration's id (`?e=<integration id>`),
+ * never the JWT, so the frame check uses these: 1 to 10 exact origins, validated like a mint's.
+ * A token whose `matih.origins` are not among them is refused (`origins_not_registered`).
+ * A 422 is `EmbedRefusedError` (`invalid_origin`).
+ */
+class EmbedOriginsApi {
+  constructor(private readonly http: HttpClient) {}
+
+  /** The registered origins; empty until set. */
+  get(opts?: RequestOptions): Promise<EmbedOrigins> {
+    return this.http.json<EmbedOrigins>({
+      method: "GET",
+      path: "/embeds/origins",
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+
+  /** Replace the registered origins (1 to 10, `https` except `http://localhost`). Returns them as stored (lower case). */
+  set(origins: readonly string[], opts?: RequestOptions): Promise<EmbedOrigins> {
+    if (!Array.isArray(origins) || origins.some((o) => typeof o !== "string")) {
+      return Promise.reject(new TypeError("embeds.origins.set: origins must be an array of strings"));
+    }
+    return this.http.json<EmbedOrigins>({
+      method: "PUT",
+      path: "/embeds/origins",
+      json: { origins },
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+}
+
 class EmbedsApi {
   /** The public keys you sign viewer tokens with: `add`, `list`, `revoke`. */
   readonly keys: EmbedKeysApi;
+  /** The origins your own signed tokens may be framed by: `get`, `set`. */
+  readonly origins: EmbedOriginsApi;
 
   constructor(private readonly http: HttpClient) {
     this.keys = new EmbedKeysApi(http);
+    this.origins = new EmbedOriginsApi(http);
   }
 
   /**

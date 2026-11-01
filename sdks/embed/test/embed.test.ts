@@ -153,6 +153,34 @@ describe("src is validated", () => {
     expect(parseSrc(SRC)?.origin).toBe(ORIGIN);
   });
 
+  it("a JWT you sign goes in the fragment like any token, and src carries only the integration id", async () => {
+    const jwt = "eyJhbGciOiJFUzI1NiIsImtpZCI6ImsxIn0.eyJpc3MiOiJhYmMifQ.c2ln";
+    const src = "https://workspace.matih.ai/embed/dashboards/d_123?e=0123456789abcdef0123456789abcdef";
+    const { el, errors } = await mount({ src, token: jwt });
+    expect(errors).toEqual([]);
+    const url = new URL(el.frame!.src);
+    expect(url.search).toBe("?e=0123456789abcdef0123456789abcdef");
+    expect(url.hash).toBe(`#token=${jwt}`);
+  });
+
+  it("refuses a src that carries a JWT in its query (personal data never goes in a URL query)", async () => {
+    const jwt = "eyJhbGciOiJFUzI1NiIsImtpZCI6ImsxIn0.eyJpc3MiOiJhYmMifQ.c2ln";
+    expect(parseSrc(`https://workspace.matih.ai/embed/dashboards/d_123?e=${jwt}`)).toBeNull();
+    expect(parseSrc(`https://workspace.matih.ai/embed/dashboards/d_123?x=1&t=${jwt}`)).toBeNull();
+    const { el, errors } = await mount({ src: `https://workspace.matih.ai/embed/dashboards/d_123?e=${jwt}`, token: jwt });
+    expect(errors).toEqual([expect.objectContaining({ code: "invalid_src", source: "element" })]);
+    expect(el.frame).toBeNull();
+  });
+
+  it("answers a token refresh with a JWT the same way as with a met_ token", async () => {
+    const jwt = "eyJhbGciOiJFUzI1NiIsImtpZCI6ImsxIn0.eyJpc3MiOiJhYmMifQ.c2ln";
+    const getToken = vi.fn(async () => jwt);
+    const { win } = await mount({ src: SRC, token: "met_attr" }, { getToken });
+    fire({ type: "matih:token-expiring", embed: "0123456789abcdef0123456789abcdef" }, ORIGIN, win);
+    await vi.waitFor(() => expect(win.postMessage).toHaveBeenCalledWith({ type: "matih:token", token: jwt }, ORIGIN));
+    expect(getToken).toHaveBeenCalledWith({ embed: "0123456789abcdef0123456789abcdef" });
+  });
+
   it("missing src and missing token are reported", async () => {
     const noSrc = await mount({ token: "met_abc" });
     expect(noSrc.errors.map((e) => e.code)).toEqual(["missing_src"]);

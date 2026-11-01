@@ -36,6 +36,13 @@ Viewer identity for embeds. Contract: `docs/EMBEDS.md` section 3.1b in matih-lab
   (Python `EmbedSigningKey`, `EmbedSigningKeyList`; TypeScript `EmbedSigningKey`,
   `EmbedSigningKeyList`, `AddEmbedSigningKeyParams`). A private key is refused and never stored.
   Both READMEs show how to sign a token with PyJWT and with `jose`; no signing dependency is added.
+- `embeds.origins.get()` and `.set(origins)` (`GET` and `PUT /embeds/origins`; Python `EmbedOrigins`,
+  TypeScript `EmbedOrigins`) register the 1 to 10 origins a token you sign yourself may be framed by.
+  The page URL of such a token is `...?e=<integration id>`: the JWT is never in a URL query (it carries
+  the viewer's email, phone and attributes), only in `<matih-embed>`'s `token` attribute, `getToken`
+  or a `matih:token` message. `<matih-embed>` refuses a `src` that has a JWT in its query
+  (`invalid_src`) and takes a JWT as the token like a `met_` secret. A token whose origins are not
+  among the registered ones is refused (`origins_not_registered`).
 - `EmbedRefusedError.code` can now also be a viewer or key code (`external_id_missing`, `key_private`,
   ...). `EMBED_REFUSAL_CODES` is unchanged: it lists the six codes of `embeds.create` filters and origins.
 

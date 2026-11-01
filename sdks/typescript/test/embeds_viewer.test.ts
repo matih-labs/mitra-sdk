@@ -160,3 +160,42 @@ describe("embeds.keys", () => {
     expect(m.calls[0].url).toBe(`${BASE}/embeds/keys/a%2Fb`);
   });
 });
+
+describe("embeds.origins (a token you sign is framed by these)", () => {
+  it("PUTs the origins and returns what was stored", async () => {
+    const m = sequence(jsonResponse({ origins: ["https://app.customer.com", "http://localhost:3000"] }));
+    const out = await makeClient(m.fetch).embeds.origins.set(["https://App.customer.com", "http://localhost:3000"]);
+    expect(m.calls[0].method).toBe("PUT");
+    expect(m.calls[0].url).toBe(`${BASE}/embeds/origins`);
+    expect(JSON.parse(String(m.calls[0].body))).toEqual({ origins: ["https://App.customer.com", "http://localhost:3000"] });
+    expect(out.origins).toEqual(["https://app.customer.com", "http://localhost:3000"]);
+  });
+
+  it("GETs them, empty until set", async () => {
+    const m = sequence(jsonResponse({ origins: [] }));
+    const out = await makeClient(m.fetch).embeds.origins.get();
+    expect(m.calls[0].method).toBe("GET");
+    expect(m.calls[0].url).toBe(`${BASE}/embeds/origins`);
+    expect(out.origins).toEqual([]);
+  });
+
+  it("refuses what is not an array of strings before sending", async () => {
+    const m = sequence(jsonResponse({ origins: [] }));
+    const client = makeClient(m.fetch);
+    for (const bad of ["https://app.customer.com", [1], ["https://a.customer.com", null]]) {
+      const err = await client.embeds.origins.set(bad as never).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(TypeError);
+    }
+    expect(m.calls).toHaveLength(0);
+  });
+
+  it("maps 422 invalid_origin to EmbedRefusedError and 403 to PermissionError", async () => {
+    const invalid = sequence(jsonResponse(refusal("invalid_origin", "an origin is scheme://host"), 422));
+    const err = await makeClient(invalid.fetch).embeds.origins.set(["http://evil.test"]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EmbedRefusedError);
+    expect((err as EmbedRefusedError).code).toBe("invalid_origin");
+    const denied = sequence(jsonResponse({ detail: { category: "permission", message: "no" } }, 403));
+    const forbidden = await makeClient(denied.fetch).embeds.origins.set(["https://a.customer.com"]).catch((e: unknown) => e);
+    expect(forbidden).toBeInstanceOf(PermissionError);
+  });
+});

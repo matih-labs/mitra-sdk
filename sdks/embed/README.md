@@ -73,8 +73,8 @@ el.getToken = async ({ embed }) => {
 
 | Name | Meaning |
 |---|---|
-| `src` | The `url` from the mint response, without `#token=...`. It includes `?e=emt_...`, which the embed page needs. Required unless the token provider also returns it. Must be an absolute `https` URL (`http` only for `localhost` and `127.0.0.1`), without credentials. |
-| `token` | The `met_...` token from the same mint, used for the first load. Optional when a provider is set. |
+| `src` | The `url` from the mint response, without `#token=...`. It includes `?e=emt_...`, which the embed page needs. For a token you sign yourself it is `https://workspace.matih.ai/embed/dashboards/d_123?e=<your integration id>`. Required unless the token provider also returns it. Must be an absolute `https` URL (`http` only for `localhost` and `127.0.0.1`), without credentials, and with no JWT in its query: a viewer token carries the viewer's email, phone and attributes, which must never reach access logs, `Referer` headers or history (a `src` that has one fails with `invalid_src`). |
+| `token` | The `met_...` token from the same mint, or the JWT your backend signed for the viewer, used for the first load. It goes only in the iframe URL's fragment. Optional when a provider is set. |
 | `token-endpoint` | A URL on your site. The element `POST`s `application/json` to it (`{}` first, then `{"embed":"emt_..."}` on refresh, cookies sent same-origin) and expects `{"token": "met_...", "src": "..."}`. `src` is only read when the `src` attribute is not set. |
 | `getToken` (property) | `(request: {embed?: string}) => string | {token, src?} | Promise<...>`. Takes precedence over `token-endpoint`. |
 | `height` | The initial height, and the fallback: a number (pixels) or a length in `px`, `vh`, `rem`, `em`, `%`. Default `640px`. Once the embed page reports its content height (`matih:resize`) the frame follows it. |

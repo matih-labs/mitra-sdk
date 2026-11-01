@@ -711,6 +711,15 @@ export interface EmbedSigningKeyList {
   keys: EmbedSigningKey[];
 }
 
+/**
+ * The origins an integration's own signed tokens may be framed by (`embeds.origins`). The
+ * page URL carries only the integration id, never the token, so this is what the frame check
+ * uses; a token's own `matih.origins` must be among them. Empty until registered.
+ */
+export interface EmbedOrigins {
+  origins: string[];
+}
+
 export interface ConversationMessage {
   id: string;
   role: string;
@@ -746,6 +755,8 @@ export function isTerminalJob(job: Pick<Job, "state">): boolean {
 /**
  * The embed URL without its fragment, which is where the token lives. This is the value for
  * the `src` attribute of `<matih-embed>`; it keeps the `?e=` token id the frame check needs.
+ * (For a token you sign yourself, `src` is `https://workspace.matih.ai/embed/dashboards/d_123?e=<integration id>`:
+ * the JWT is never in a URL query, only in the `token` attribute or `getToken`.)
  */
 export function embedSrc(embed: Embed | string): string {
   const url = typeof embed === "string" ? embed : embed.url;

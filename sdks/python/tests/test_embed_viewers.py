@@ -12,6 +12,7 @@ from mitra import (
     BusyError,
     Embed,
     EmbedNotFoundError,
+    EmbedOrigins,
     EmbedRefusedError,
     EmbedSigningKey,
     EmbedSigningKeyList,
@@ -229,3 +230,47 @@ async def test_async_create_validates_the_viewer_before_sending(make_async_clien
     client = make_async_client(lambda r: json_response(MINTED, 201))
     with pytest.raises(ValueError):
         await client.embeds.create(resource=DASHBOARD, origins=ORIGINS, viewer=["cust-42"])  # type: ignore[arg-type]
+
+
+# ------------------------------------------------------------------ origins (a token you sign is framed by these)
+
+
+def test_origins_set_puts_them_and_returns_what_was_stored(make_client):
+    h = recorder({"origins": ["https://app.customer.com", "http://localhost:3000"]})
+    out = make_client(h).embeds.origins.set(("https://App.customer.com", "http://localhost:3000"))
+    request = h.seen["requests"][0]
+    assert request.method == "PUT"
+    assert str(request.url) == "https://workspace.matih.ai/api/v1/embeds/origins"
+    assert body_of(request) == {"origins": ["https://App.customer.com", "http://localhost:3000"]}
+    assert isinstance(out, EmbedOrigins)
+    assert out.origins == ["https://app.customer.com", "http://localhost:3000"]
+
+
+def test_origins_get_is_empty_until_set(make_client):
+    h = recorder({"origins": []})
+    out = make_client(h).embeds.origins.get()
+    request = h.seen["requests"][0]
+    assert request.method == "GET"
+    assert str(request.url) == "https://workspace.matih.ai/api/v1/embeds/origins"
+    assert isinstance(out, EmbedOrigins) and out.origins == []
+
+
+@pytest.mark.parametrize("bad", ["https://app.customer.com", [1], ["https://a.customer.com", None]])
+def test_origins_set_rejects_what_is_not_a_list_of_strings_before_sending(make_client, bad):
+    h = recorder({"origins": []})
+    with pytest.raises(ValueError):
+        make_client(h).embeds.origins.set(bad)
+    assert h.seen["requests"] == []
+
+
+def test_origins_set_maps_invalid_origin_to_embed_refused(make_client):
+    client = make_client(recorder(refusal("invalid_origin", "an origin is scheme://host"), 422))
+    with pytest.raises(EmbedRefusedError) as info:
+        client.embeds.origins.set(["http://evil.test"])
+    assert info.value.status == 422 and info.value.code == "invalid_origin"
+
+
+def test_origins_need_the_embeds_create_scope(make_client):
+    client = make_client(recorder({"detail": {"category": "permission", "message": "no"}}, 403))
+    with pytest.raises(PermissionDeniedError):
+        client.embeds.origins.set(["https://app.customer.com"])

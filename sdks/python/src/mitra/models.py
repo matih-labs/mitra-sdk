@@ -453,7 +453,7 @@ class EmbedResource(_Model):
 
 def embed_src(url: str) -> str:
     """The embed URL without its fragment, which is where the token lives. This is the value
-    for the ``src`` attribute of ``<matih-embed>``; it keeps the ``?e=`` token id the frame
+    for the ``src`` attribute of ``<matih-embed>``; it keeps the ``?e=`` token id (for a token you sign yourself, the integration id) the frame
     check needs."""
     return url.split("#", 1)[0]
 
@@ -539,3 +539,11 @@ class EmbedSigningKey(_Model):
 
 class EmbedSigningKeyList(_Model):
     keys: list[EmbedSigningKey] = Field(default_factory=list)
+
+
+class EmbedOrigins(_Model):
+    """The origins your own signed tokens may be framed by (``embeds.origins``). The page URL
+    carries only your integration's id, never the token, so the frame check uses these; a token's
+    own ``matih.origins`` must be among them. Empty until registered."""
+
+    origins: list[str] = Field(default_factory=list)

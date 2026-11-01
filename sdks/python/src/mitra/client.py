@@ -23,7 +23,10 @@ from .models import (
     DuplicateChoice,
     Embed,
     EmbedList,
+    EmbedOrigins,
     EmbedResource,
+    EmbedSigningKey,
+    EmbedSigningKeyList,
     File,
     FileList,
     GemList,
@@ -563,14 +566,39 @@ class _EmbedKeys(_Resources):
         return self._c.request("DELETE", f"/embeds/keys/{quote(key_id, safe='')}", **opts)
 
 
+class _EmbedOrigins(_Resources):
+    """The origins your own signed tokens may be framed by (``/embeds/origins``). Needs
+    ``embeds:create``. The page URL of a token you sign carries only your integration's id
+    (``?e=<integration id>``), never the JWT, so the frame check uses these. A token whose
+    ``matih.origins`` are not among them is refused (``origins_not_registered``). A 422 is
+    ``EmbedRefusedError`` (``invalid_origin``)."""
+
+    def get(self, **opts: _Opts) -> Any:
+        """The registered origins, empty until set (:class:`EmbedOrigins`)."""
+        return self._c.request("GET", "/embeds/origins", parse=EmbedOrigins.model_validate, **opts)
+
+    def set(self, origins: list[str] | tuple[str, ...], **opts: _Opts) -> Any:
+        """Replace the registered origins (``PUT /embeds/origins``): 1 to 10 exact origins
+        (``https://app.example.com``; https only, except ``http://localhost[:port]``). Returns an
+        :class:`EmbedOrigins` with them as stored (lower case)."""
+        if isinstance(origins, (str, bytes)) or not all(isinstance(o, str) for o in origins):
+            raise ValueError("origins must be a list of strings")
+        return self._c.request(
+            "PUT", "/embeds/origins", json_body={"origins": list(origins)},
+            parse=EmbedOrigins.model_validate, **opts,
+        )
+
+
 class _Embeds(_Resources):
     """Embed dashboards, Gems and Ask in your own product. Needs ``embeds:create`` (create,
-    revoke, keys) or ``embeds:read`` (list). Pair with the ``<matih-embed>`` element
-    (``@matihlabs/embed``). ``keys`` registers the public keys you sign viewer tokens with."""
+    revoke, keys, origins) or ``embeds:read`` (list). Pair with the ``<matih-embed>`` element
+    (``@matihlabs/embed``). ``keys`` registers the public keys you sign viewer tokens with and
+    ``origins`` the sites their pages may be framed by."""
 
     def __init__(self, core: Any) -> None:
         super().__init__(core)
         self.keys = _EmbedKeys(core)
+        self.origins = _EmbedOrigins(core)
 
     def create(
         self,

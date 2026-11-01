@@ -4,8 +4,13 @@
  * Contract: docs/EMBEDS.md in matih-labs/mitra, sections 3.1 (mint) and 7 (browser protocol).
  *
  *   iframe URL            {src}#token={token}        the token is only ever in the fragment
- *   iframe -> parent      {type:"matih:token-expiring", embed:"emt_..."}
+ *   iframe -> parent      {type:"matih:token-expiring", embed:"emt_..."}   (the integration id for a JWT you sign)
  *   parent -> iframe      {type:"matih:token", token:"met_..."}   posted to the frame's exact origin
+ *
+ * The token is a `met_...` secret from a mint, or the compact JWT your backend signed for its viewer:
+ * the element treats both alike and never looks inside. A JWT carries the viewer's email, phone and
+ * attributes, so it is never in a URL query (access logs, Referer, history): `src` carries only
+ * `?e=<emt_ id or integration id>`, and `src` with a JWT in its query is refused (`invalid_src`).
  *   iframe -> parent      {type:"matih:ready"} and {type:"matih:error", code}   (optional)
  *   iframe -> parent      {type:"matih:resize", height:<px>}   the frame's content height
  *
@@ -16,7 +21,7 @@
 /** What a token provider may return: the token alone, or the token and the page to load. */
 export type TokenResult = string | { token: string; src?: string; url?: string };
 
-/** What `getToken` is told. `embed` is the `emt_...` id of the token that is about to expire. */
+/** What `getToken` is told. `embed` is the id the embed page reports (the `emt_...` id of the token that is about to expire). */
 export interface TokenRequest {
   embed?: string;
 }
@@ -58,6 +63,7 @@ function isLocalHost(host: string): boolean {
  * The embed page URL, or null when it must not be framed: not absolute, not https (plain http
  * only for localhost and 127.0.0.1, as the origins rule in the contract), or with credentials.
  * Any fragment is dropped: the token is added by the element, not taken from the page's markup.
+ * A query value that is a JWT (`eyJ...`) is refused: a viewer token never goes in a URL query.
  */
 export function parseSrc(value: string | null | undefined): URL | null {
   if (!value) return null;
@@ -69,7 +75,13 @@ export function parseSrc(value: string | null | undefined): URL | null {
   }
   const secure = url.protocol === "https:" || (url.protocol === "http:" && isLocalHost(url.hostname));
   if (!secure || url.username !== "" || url.password !== "") return null;
+  for (const value of url.searchParams.values()) if (looksLikeJwt(value)) return null;
   return url;
+}
+
+/** A compact JWS: base64url segments, the first a JSON header (`{"` is `eyJ`). */
+function looksLikeJwt(value: string): boolean {
+  return /^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/.test(value);
 }
 
 function cssLength(value: string | null): string {
@@ -251,12 +263,12 @@ export class MatihEmbed extends HostBase {
     }
 
     if (!srcValue) {
-      this.fail("missing_src", "set the src attribute to the url from the mint response, without its #token");
+      this.fail("missing_src", "set the src attribute to the url from the mint response, without its #token (or, for a token you sign, the page URL with ?e=<integration id>)");
       return;
     }
     const page = parseSrc(srcValue);
     if (!page) {
-      this.fail("invalid_src", "src must be an absolute https URL (http only for localhost and 127.0.0.1)");
+      this.fail("invalid_src", "src must be an absolute https URL (http only for localhost and 127.0.0.1), with no token in its query");
       return;
     }
 

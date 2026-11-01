@@ -217,6 +217,10 @@ To skip a call per page, sign the token yourself. Register the public half of a 
 const key = await mitra.embeds.keys.add({ publicKey: publicPem, kid: "k1" }); // key.id is esk_...
 await mitra.embeds.keys.list();            // live and revoked keys
 await mitra.embeds.keys.revoke(key.id);    // 204; tokens it signed stop at their next request
+// Where your pages may be framed (1 to 10 exact origins; replaces the list). The page URL names only your
+// integration, never the token, so the frame check uses these; a token's own origins must be among them.
+await mitra.embeds.origins.set(["https://app.customer.com"]); // returns { origins }
+await mitra.embeds.origins.get();                              // { origins: [] } until set
 
 // Per page, on your backend (here with `jose`; any JWT library works).
 import { SignJWT, importPKCS8 } from "jose";
@@ -237,10 +241,10 @@ const jwt = await new SignJWT({
   .setIssuedAt(now)
   .setExpirationTime(now + 300)                       // at most 900 s after iat
   .sign(await importPKCS8(privatePem, "ES256"));
-// Give the page { token: jwt, src: `https://workspace.matih.ai/embed/dashboards/d_123?e=${jwt}` }.
+// Give the page { token: jwt, src: `https://workspace.matih.ai/embed/dashboards/d_123?e=${integrationId}` }.
 ```
 
-The JWT goes in the `?e=` of `src` because the frame check cannot see a URL fragment, so keep that URL out of your logs. A refused JWT is a 401 whose `code` is `jwt_alg`, `jwt_kid_missing`, `jwt_unknown_key`, `jwt_key_revoked`, `jwt_signature`, `jwt_expired`, `jwt_claims` or `jwt_replay`, or the finer code of the claim that failed (`invalid_origin`, `invalid_resource`, a viewer code). Key errors from `embeds.keys` are `EmbedRefusedError` with `code` one of `key_private`, `key_invalid`, `alg_unsupported`, `alg_mismatch`, `key_too_weak`, `kid_missing`, `kid_invalid`; a reused `kid` or a sixth live key is a 409.
+The JWT never goes in a URL query: it carries the viewer's email, phone and attributes, and a query string reaches access logs, `Referer` headers and browser history. `src` names only your integration (`?e=<integration id>`, not secret and not personal) and the JWT travels in `<matih-embed>`'s `token` attribute or `getToken`, which put it in the URL fragment and a message, never a query. `src` with a JWT in its query is refused, by `<matih-embed>` and by Matih's frame check. Register your origins with `embeds.origins.set` first: a token whose `origins` are not among them is refused (`origins_not_registered`), and one shown on a site that is not among them is a 403 `origin_not_allowed`. A refused JWT is a 401 whose `code` is `jwt_alg`, `jwt_kid_missing`, `jwt_unknown_key`, `jwt_key_revoked`, `jwt_signature`, `jwt_expired`, `jwt_claims` or `jwt_replay`, or the finer code of the claim that failed (`invalid_origin`, `origins_not_registered`, `invalid_resource`, a viewer code). Key errors from `embeds.keys` are `EmbedRefusedError` with `code` one of `key_private`, `key_invalid`, `alg_unsupported`, `alg_mismatch`, `key_too_weak`, `kid_missing`, `kid_invalid`; a reused `kid` or a sixth live key is a 409.
 
 ## Webhooks
 
