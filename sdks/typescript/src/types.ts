@@ -17,6 +17,11 @@ export interface RequestOptions {
   timeoutMs?: number;
   /** Maximum retries. Overrides the client default. */
   maxRetries?: number;
+  /**
+   * Time limit in milliseconds for the whole call: every attempt and every wait between retries.
+   * Each attempt is also cut off by what is left of it. No limit by default.
+   */
+  deadlineMs?: number;
 }
 
 export interface Column {
@@ -137,7 +142,7 @@ export interface PredictionParams {
   language?: string;
 }
 
-export interface WaitOptions extends Omit<RequestOptions, "timeoutMs" | "idempotencyKey"> {
+export interface WaitOptions extends Omit<RequestOptions, "timeoutMs" | "idempotencyKey" | "deadlineMs"> {
   /** Overall time to wait before throwing JobTimeoutError. Default 35 minutes. */
   timeoutMs?: number;
   /** First delay between polls. Default 1000. */

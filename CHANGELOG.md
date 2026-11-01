@@ -4,6 +4,22 @@ All notable changes are listed here. The Python and TypeScript SDKs share one ve
 released together: one tag `vX.Y.Z` publishes `mitra-sdk` to PyPI and `@matihlabs/mitra` and
 `@matihlabs/embed` to npm.
 
+## Unreleased
+
+Performance and timeouts, from a review of connection reuse, timeouts, retries and package size.
+
+- Python: a connection pool you can size (`max_connections`, `max_keepalive_connections`,
+  `keepalive_expiry`, default 30 s), separate `connect_timeout`, optional `http2` extra, per-call
+  `request_timeout`, `max_retries` and `deadline`. Uploads stream from disk.
+- Both: retries use jittered exponential backoff (capped at 8 s) and stop after 60 s of sleeping;
+  408 is retried and 500, 502, 503, 504 retried on safe calls only; a `Retry-After` over 60 s is
+  raised on any status, not slept on. TypeScript gains `deadlineMs`.
+- Both: a call that sends `Prefer: wait=N` gets a read timeout of N plus 15 s; Python no longer
+  issues a second GET after a 202 that already carried the job. Event streams end with an error when
+  the server goes silent, instead of hanging.
+- Package size: source maps are no longer published (TypeScript and embed); the Python sdist holds
+  only the source, tests and metadata. Size budgets run in CI.
+
 ## 0.1.0 - 2026-11-01
 
 First release. These SDKs target the Matih public API (`/api/v1`), live on `workspace.matih.ai`.

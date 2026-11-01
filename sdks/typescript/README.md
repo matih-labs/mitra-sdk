@@ -242,10 +242,43 @@ app.post("/hooks/mitra", express.raw({ type: "application/json" }), (req, res) =
 
 ## Retries and idempotency
 
-- `429` is retried, honouring `Retry-After` (a wait longer than 60 seconds is surfaced as a `RateLimitError` instead).
-- `5xx` and network failures are retried for `GET`, `PUT` and `DELETE`, and for any call that carries an idempotency key.
+- `429` is retried, honouring `Retry-After` (a wait longer than 60 seconds is surfaced as the error instead). Every other 4xx is final, except `408`, which is retried like a `5xx`.
+- `408`, `5xx` and network failures are retried for `GET`, `PUT` and `DELETE`, and for any call that carries an idempotency key.
 - `ask` and `predictions.create` send an `Idempotency-Key` automatically. The same key is reused across internal retries, so a retry is never charged twice. The server honours the key on these two calls only. Pass `{ idempotencyKey }` to supply your own.
 - `maxRetries` defaults to 2; set it per client or per call. Retries use exponential backoff with jitter.
+
+## Performance and timeouts
+
+**Make one client and reuse it.** Node's `fetch` keeps connections alive and reuses them across calls
+and across clients, so the handshake is paid once. Measured against `workspace.matih.ai` from a laptop
+(unauthenticated `GET`, 40 calls each): about 216 ms median with a reused connection and about 739 ms
+with a new connection per call; the same probe to a nearby control host went from 17 ms to 85 ms.
+Always `await` or cancel a response; `@matihlabs/mitra` reads every body it receives, so no socket is
+left open by an error.
+
+Node's built-in `fetch` closes an idle connection after about 4 s by default, short of what calls a
+minute apart need. To keep them warm for 30 s, give the client an undici dispatcher:
+
+```ts
+import { Agent } from "undici";
+const dispatcher = new Agent({ keepAliveTimeout: 30_000, connections: 100 });
+const client = new Mitra({
+  fetch: (url, init) => fetch(url, { ...init, dispatcher } as RequestInit),
+});
+```
+
+- `timeoutMs` (default 60 s) limits one attempt, up to the response headers. For a stream it limits each
+  silence between events, since the server sends a heartbeat every 10 s. A request that asks the server to
+  wait (`wait: N`, sent as `Prefer: wait=N`) gets that wait plus 15 s.
+- **Per call**: `timeoutMs`, `maxRetries`, `signal` (an `AbortSignal` that cancels the request and its
+  retries) and `deadlineMs`, a limit on the whole call, every attempt and every pause between them. The
+  deadline shortens each attempt as well, so `deadlineMs: 5000` never runs past 5 s.
+- Retry rules are in [Retries and idempotency](#retries-and-idempotency): jittered exponential backoff
+  (500 ms doubling to 8 s, each wait 50 to 100 percent of that), `Retry-After` honoured, and all the
+  sleeping of one call capped at 60 s.
+- **Nothing is cached.** The API sends no `ETag` or `Cache-Control`, so every call asks the server.
+- The package has one dependency (`openapi-fetch`), ships no source maps and no tests, and is
+  `sideEffects: false`, so a bundler drops what you do not import. CI fails if the tarball passes 40 KB.
 
 ## Errors
 
