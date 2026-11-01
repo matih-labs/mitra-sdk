@@ -444,8 +444,8 @@ class StreamEvent(_Model):
 
 
 class EmbedResource(_Model):
-    """What an embed shows: ``type`` is ``dashboard`` or ``gems``. For ``gems``, ``id`` is the
-    source (connection) id."""
+    """What an embed shows: ``type`` is ``dashboard``, ``gems`` or ``ask``. For ``gems`` and
+    ``ask``, ``id`` is the source (connection) id."""
 
     type: str
     id: str
@@ -456,6 +456,13 @@ def embed_src(url: str) -> str:
     for the ``src`` attribute of ``<matih-embed>``; it keeps the ``?e=`` token id the frame
     check needs."""
     return url.split("#", 1)[0]
+
+
+class EmbedViewerRef(_Model):
+    """The viewer a token vouches for: ``id`` (``vwr_...``) is Matih's id for your end user. It
+    is not secret and never carries your external id, email or phone."""
+
+    id: str
 
 
 class Embed(_Model):
@@ -473,6 +480,7 @@ class Embed(_Model):
     url: str = Field(repr=False)
     resource: EmbedResource
     origins: list[str] = Field(default_factory=list)
+    viewer: EmbedViewerRef | None = None
 
     @property
     def src(self) -> str:
@@ -509,7 +517,25 @@ class EmbedSummary(_Model):
     revoked_at: str | None = None
     key: EmbedKey | None = None
     member: EmbedMember | None = None
+    viewer: EmbedViewerRef | None = None
 
 
 class EmbedList(_Model):
     embeds: list[EmbedSummary] = Field(default_factory=list)
+
+
+class EmbedSigningKey(_Model):
+    """A public key registered to verify the viewer tokens your backend signs
+    (``embeds.keys``). ``id`` is ``esk_...``; ``public_key`` is a public JWK. Nothing private is
+    ever stored or returned. ``revoked_at`` is None while the key is live."""
+
+    id: str
+    kid: str
+    alg: str
+    public_key: dict[str, Any] = Field(default_factory=dict)
+    created_at: str | None = None
+    revoked_at: str | None = None
+
+
+class EmbedSigningKeyList(_Model):
+    keys: list[EmbedSigningKey] = Field(default_factory=list)

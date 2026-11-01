@@ -490,6 +490,7 @@ def _embed_body(
     origins: list[str] | tuple[str, ...],
     filters: dict[str, Any] | None,
     ttl_seconds: int | None,
+    viewer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if isinstance(resource, EmbedResource):
         res = {"type": resource.type, "id": resource.id}
@@ -498,7 +499,7 @@ def _embed_body(
     ):
         res = {"type": resource["type"], "id": resource["id"]}
     else:
-        raise ValueError('resource must be {"type": "dashboard" | "gems", "id": "..."}')
+        raise ValueError('resource must be {"type": "dashboard" | "gems" | "ask", "id": "..."}')
     if isinstance(origins, str) or not origins:
         raise ValueError("origins must be a non-empty list of exact origins, e.g. ['https://app.example.com']")
     body: dict[str, Any] = {"resource": res, "origins": list(origins)}
@@ -506,12 +507,70 @@ def _embed_body(
         body["filters"] = filters
     if ttl_seconds is not None:
         body["ttl_seconds"] = ttl_seconds
+    if viewer is not None:
+        if not isinstance(viewer, dict):
+            raise ValueError('viewer must be a dict such as {"external_id": "cust-42"}')
+        body["viewer"] = viewer
     return body
 
 
+def _key_body(
+    public_key: str | dict[str, Any], kid: str | None, alg: str | None
+) -> dict[str, Any]:
+    if not isinstance(public_key, (str, dict)):
+        raise ValueError("public_key must be a PEM string or a JWK dict")
+    body: dict[str, Any] = {"public_key": public_key}
+    if kid is not None:
+        body["kid"] = kid
+    if alg is not None:
+        body["alg"] = alg
+    return body
+
+
+class _EmbedKeys(_Resources):
+    """The public keys your backend signs viewer tokens with (``/embeds/keys``). Needs
+    ``embeds:create``. Register the PUBLIC half only: a private key is refused and never stored.
+    A 422 is ``EmbedRefusedError`` (read ``code``: ``key_private``, ``key_invalid``,
+    ``alg_unsupported``, ``key_too_weak``, ``kid_missing``); a 409 (``kid_taken``,
+    ``too_many_keys``) is ``BusyError``."""
+
+    def add(
+        self,
+        *,
+        public_key: str | dict[str, Any],
+        kid: str | None = None,
+        alg: str | None = None,
+        **opts: _Opts,
+    ) -> Any:
+        """Register a public key (``POST /embeds/keys``, HTTP 201). ``public_key`` is a PEM
+        string (``-----BEGIN PUBLIC KEY-----``) or a JWK dict. ``kid`` is the key id your tokens
+        carry in their header (unique for the integration, even among revoked keys; defaults to
+        the JWK's own ``kid``). ``alg`` is ``RS256`` (RSA, 2048 bits or more), ``ES256`` (P-256)
+        or ``EdDSA`` (Ed25519), inferred from the key when absent; HS256 is never accepted. An
+        integration has at most 5 live keys. Returns an :class:`EmbedSigningKey`."""
+        return self._c.request(
+            "POST", "/embeds/keys", json_body=_key_body(public_key, kid, alg),
+            parse=EmbedSigningKey.model_validate, **opts,
+        )
+
+    def list(self, **opts: _Opts) -> Any:
+        """This integration's keys, live and revoked, oldest first (:class:`EmbedSigningKeyList`)."""
+        return self._c.request("GET", "/embeds/keys", parse=EmbedSigningKeyList.model_validate, **opts)
+
+    def revoke(self, key_id: str, **opts: _Opts) -> Any:
+        """Revoke a key by its ``esk_...`` id (HTTP 204, idempotent). Tokens it signed stop at
+        their next request. Returns None."""
+        return self._c.request("DELETE", f"/embeds/keys/{quote(key_id, safe='')}", **opts)
+
+
 class _Embeds(_Resources):
-    """Embed dashboards and Gems in your own product. Needs ``embeds:create`` (create, revoke)
-    or ``embeds:read`` (list). Pair with the ``<matih-embed>`` element (``@matihlabs/embed``)."""
+    """Embed dashboards, Gems and Ask in your own product. Needs ``embeds:create`` (create,
+    revoke, keys) or ``embeds:read`` (list). Pair with the ``<matih-embed>`` element
+    (``@matihlabs/embed``). ``keys`` registers the public keys you sign viewer tokens with."""
+
+    def __init__(self, core: Any) -> None:
+        super().__init__(core)
+        self.keys = _EmbedKeys(core)
 
     def create(
         self,
@@ -520,22 +579,28 @@ class _Embeds(_Resources):
         origins: list[str] | tuple[str, ...],
         filters: dict[str, Any] | None = None,
         ttl_seconds: int | None = None,
+        viewer: dict[str, Any] | None = None,
         **opts: _Opts,
     ) -> Any:
         """Mint a short-lived embed token (``POST /embeds``; free; each call mints a new one).
 
-        ``resource`` is ``{"type": "dashboard", "id": "d_123"}`` or, for Gems,
-        ``{"type": "gems", "id": "<source id>"}``. ``origins`` are the 1 to 10 exact origins
+        ``resource`` is ``{"type": "dashboard", "id": "d_123"}`` or, for Gems or Ask,
+        ``{"type": "gems" | "ask", "id": "<source id>"}``. ``origins`` are the 1 to 10 exact origins
         (``https://app.example.com``; https only, except ``http://localhost[:port]`` and
         ``http://127.0.0.1[:port]``) allowed to frame the page. ``filters`` are the viewer's row
         filters, exactly the parameters the dashboard declares; Gems take none.
         ``ttl_seconds`` is 60 to 900 (default 300). A token is never renewed: mint again.
+        ``viewer`` is your end user this token is for: ``{"external_id": "cust-42", "name": ...,
+        "email": ..., "phone": "+919800000042", "locale": "en-IN", "attributes": {...}}``. Only
+        ``external_id`` is required, and it alone tells viewers apart (never email or phone);
+        the response then carries ``viewer.id``. To skip this call per page, sign the token
+        yourself: see ``embeds.keys`` and the README.
 
         Returns an :class:`Embed`. Raises ``EmbedRefusedError`` (422, read ``code``),
         ``EmbedNotFoundError`` (404) or ``PermissionDeniedError`` (403). Call this from your
         backend, never from the browser: the API key must stay secret."""
         return self._c.request(
-            "POST", "/embeds", json_body=_embed_body(resource, origins, filters, ttl_seconds),
+            "POST", "/embeds", json_body=_embed_body(resource, origins, filters, ttl_seconds, viewer),
             parse=Embed.model_validate, **opts,
         )
 

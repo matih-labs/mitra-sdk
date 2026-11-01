@@ -27,6 +27,18 @@ matih-labs/mitra.
   `matih:error`. It joins the release workflow.
 - `examples/embed/`: a Node (`node:http`) and a Python example that mint and show an embed.
 
+Viewer identity for embeds. Contract: `docs/EMBEDS.md` section 3.1b in matih-labs/mitra.
+
+- `embeds.create` takes `viewer` (`{external_id, name?, email?, phone?, locale?, attributes?}`;
+  Python `viewer=`, TypeScript `viewer`) and the response carries `viewer.id`. `resource.type` also
+  allows `"ask"`. A viewer is told apart by `external_id` alone, never by email or phone.
+- `embeds.keys.add`, `.list` and `.revoke` register the public keys you sign viewer JWTs with
+  (Python `EmbedSigningKey`, `EmbedSigningKeyList`; TypeScript `EmbedSigningKey`,
+  `EmbedSigningKeyList`, `AddEmbedSigningKeyParams`). A private key is refused and never stored.
+  Both READMEs show how to sign a token with PyJWT and with `jose`; no signing dependency is added.
+- `EmbedRefusedError.code` can now also be a viewer or key code (`external_id_missing`, `key_private`,
+  ...). `EMBED_REFUSAL_CODES` is unchanged: it lists the six codes of `embeds.create` filters and origins.
+
 ## 0.1.0 - 2026-10-31
 
 First release. The Matih public API (`/api/v1`) is rolling out to `workspace.matih.ai` now; these
