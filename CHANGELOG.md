@@ -46,7 +46,7 @@ Viewer identity for embeds. Contract: `docs/EMBEDS.md` section 3.1b in matih-lab
 - `EmbedRefusedError.code` can now also be a viewer or key code (`external_id_missing`, `key_private`,
   ...). `EMBED_REFUSAL_CODES` is unchanged: it lists the six codes of `embeds.create` filters and origins.
 
-The Ask embed: a question box and its answers inside your own product. Contract: `docs/EMBEDS.md` section 13 in
+The Ask embed: a question box and its answers inside your own product. Contract: `docs/EMBEDS.md` section 14 in
 matih-labs/mitra.
 
 - `<matih-embed kind="ask">` shows the Ask box. Its `theme` (`light`, `dark` or `auto`), `accent` (a hex colour:

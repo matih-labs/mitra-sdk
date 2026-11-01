@@ -474,7 +474,7 @@ describe("events", () => {
 });
 
 /**
- * kind="ask" (docs/EMBEDS.md section 13 in matih-labs/mitra): the Ask box takes its look from attributes, which go in the
+ * kind="ask" (docs/EMBEDS.md section 14 in matih-labs/mitra): the Ask box takes its look from attributes, which go in the
  * page's query; the token stays in the fragment. New surface, not a fix.
  * Historical FAIL evidence: not applicable (new feature, no pre-fix code).
  */

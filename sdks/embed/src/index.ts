@@ -1,7 +1,7 @@
 /**
  * `<matih-embed>`: a Matih dashboard, Gems feed or Ask box in an iframe.
  *
- * Contract: docs/EMBEDS.md in matih-labs/mitra, sections 3.1 (mint), 7 (browser protocol) and 13 (the Ask embed).
+ * Contract: docs/EMBEDS.md in matih-labs/mitra, sections 3.1 (mint), 7 (browser protocol) and 14 (the Ask embed).
  *
  *   iframe URL            {src}#token={token}        the token is only ever in the fragment
  *   iframe -> parent      {type:"matih:token-expiring", embed:"emt_..."}   (the integration id for a JWT you sign)
