@@ -1,7 +1,7 @@
 /**
- * `<matih-embed>`: a Matih dashboard or Gems feed in an iframe.
+ * `<matih-embed>`: a Matih dashboard, Gems feed or Ask box in an iframe.
  *
- * Contract: docs/EMBEDS.md in matih-labs/mitra, sections 3.1 (mint) and 7 (browser protocol).
+ * Contract: docs/EMBEDS.md in matih-labs/mitra, sections 3.1 (mint), 7 (browser protocol) and 13 (the Ask embed).
  *
  *   iframe URL            {src}#token={token}        the token is only ever in the fragment
  *   iframe -> parent      {type:"matih:token-expiring", embed:"emt_..."}   (the integration id for a JWT you sign)
@@ -45,6 +45,10 @@ export const SANDBOX = "allow-scripts allow-same-origin";
 export const TOKEN_TIMEOUT_MS = 15_000;
 
 const DEFAULT_HEIGHT = "640px";
+/** An Ask box is a field and, once asked, an answer: it starts short and follows its own `matih:resize`. */
+const DEFAULT_ASK_HEIGHT = "280px";
+/** The Ask page shows at most this many suggestion chips (the page clips the same way; sending more would only lengthen the URL). */
+const MAX_ASK_SUGGESTIONS = 3;
 /** A frame cannot ask for more than this: a bad or hostile height must not make the page unusable. */
 const MAX_FRAME_HEIGHT_PX = 20_000;
 
@@ -84,12 +88,55 @@ function looksLikeJwt(value: string): boolean {
   return /^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/.test(value);
 }
 
-function cssLength(value: string | null): string {
-  if (value === null) return DEFAULT_HEIGHT;
+function cssLength(value: string | null, fallback: string = DEFAULT_HEIGHT): string {
+  if (value === null) return fallback;
   const v = value.trim();
   if (/^\d+(\.\d+)?$/.test(v)) return `${v}px`;
   if (/^\d+(\.\d+)?(px|vh|rem|em|%)$/.test(v)) return v;
-  return DEFAULT_HEIGHT;
+  return fallback;
+}
+
+/** What the Ask page reads from its address (`theme`, `accent`, `font`, `heading`, `placeholder`, `suggestions`). */
+export interface AskOptions {
+  /** `light`, `dark` or `auto` (the visitor's own setting, the default). */
+  theme?: "light" | "dark" | "auto";
+  /** A hex colour, `#2750cc` or `2750cc` or `#25c`. It colours the send button, the focus ring and the chart's lead colour, nothing else. */
+  accent?: string;
+  /** A plain font stack, e.g. `Georgia, serif`. No URLs and no punctuation beyond `, ' " -`. */
+  font?: string;
+  /** The line above the field. */
+  heading?: string;
+  /** The field's placeholder. */
+  placeholder?: string;
+  /** Up to three questions to offer, as chips. In an attribute they are separated by `|`. */
+  suggestions?: string[] | string;
+}
+
+const HEX_COLOUR = /^#?([0-9a-f]{6}|[0-9a-f]{3})$/i;
+const FONT_STACK = /^[\w ,'"-]{1,80}$/;
+
+const oneLine = (value: string | null | undefined, max: number): string => (value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+
+/**
+ * The Ask page's options as query parameters, each held to what the page accepts: a colour is a hex colour, a font a plain
+ * stack, the texts short, at most three suggestions. What does not fit is left out, so the page shows its own default.
+ */
+export function askParams(options: AskOptions): URLSearchParams {
+  const out = new URLSearchParams();
+  if (options.theme === "light" || options.theme === "dark") out.set("theme", options.theme);
+  const colour = HEX_COLOUR.exec((options.accent ?? "").trim());
+  if (colour?.[1]) out.set("accent", colour[1].toLowerCase());
+  const font = (options.font ?? "").trim();
+  if (FONT_STACK.test(font)) out.set("font", font);
+  const heading = oneLine(options.heading, 80);
+  if (heading) out.set("heading", heading);
+  const placeholder = oneLine(options.placeholder, 100);
+  if (placeholder) out.set("placeholder", placeholder);
+  const raw = typeof options.suggestions === "string" ? options.suggestions.split("|") : (options.suggestions ?? []);
+  // `|` separates them in the address, so one cannot hold a `|` of its own.
+  const suggestions = raw.map((s) => oneLine(s.replace(/\|/g, " "), 120)).filter((s) => s !== "").slice(0, MAX_ASK_SUGGESTIONS);
+  if (suggestions.length > 0) out.set("suggestions", suggestions.join("|"));
+  return out;
 }
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
@@ -126,7 +173,7 @@ iframe { display: block; width: 100%; border: 0; }
 
 export class MatihEmbed extends HostBase {
   static get observedAttributes(): string[] {
-    return ["src", "token", "token-endpoint", "height", "title"];
+    return ["src", "token", "token-endpoint", "height", "title", "kind", "theme", "accent", "font", "heading", "placeholder", "suggestions"];
   }
 
   private provider: GetToken | undefined;
@@ -159,6 +206,11 @@ export class MatihEmbed extends HostBase {
       this.starved = false;
       this.schedule();
     }
+  }
+
+  /** `ask` for an Ask box (its options are then read from the attributes), anything else for a dashboard or Gems feed. */
+  private isAsk(): boolean {
+    return this.getAttribute("kind") === "ask";
   }
 
   /** The iframe, once it exists. */
@@ -274,6 +326,18 @@ export class MatihEmbed extends HostBase {
 
     // The token goes in the fragment only: it is not sent to any server, not in the Referer,
     // not in logs. The embed page reads it and removes it from the address.
+    // An Ask box's options are its attributes, in the query (they are not secret; the viewer's token is never there).
+    if (this.isAsk()) {
+      const options = askParams({
+        theme: (this.getAttribute("theme") ?? undefined) as AskOptions["theme"],
+        accent: this.getAttribute("accent") ?? undefined,
+        font: this.getAttribute("font") ?? undefined,
+        heading: this.getAttribute("heading") ?? undefined,
+        placeholder: this.getAttribute("placeholder") ?? undefined,
+        suggestions: this.getAttribute("suggestions") ?? undefined,
+      });
+      for (const [key, value] of options) page.searchParams.set(key, value);
+    }
     page.hash = new URLSearchParams({ token }).toString();
     this.frameOrigin = page.origin;
 
@@ -308,8 +372,9 @@ export class MatihEmbed extends HostBase {
     const iframe = this.frameEl;
     if (!iframe) return;
     // `height` is the initial and fallback height; the frame's own `matih:resize` takes over from it.
-    iframe.style.height = this.resizedPx === null ? cssLength(this.getAttribute("height")) : `${this.resizedPx}px`;
-    iframe.title = this.getAttribute("title") || "Matih embed";
+    const ask = this.isAsk();
+    iframe.style.height = this.resizedPx === null ? cssLength(this.getAttribute("height"), ask ? DEFAULT_ASK_HEIGHT : DEFAULT_HEIGHT) : `${this.resizedPx}px`;
+    iframe.title = this.getAttribute("title") || (ask ? "Ask Matih" : "Matih embed");
   }
 
   // ---------------------------------------------------------------- tokens
@@ -419,6 +484,43 @@ export class MatihEmbed extends HostBase {
   private emitError(detail: MatihErrorDetail): void {
     this.dispatchEvent(new CustomEvent<MatihErrorDetail>("matih:error", { bubbles: true, composed: true, detail }));
   }
+}
+
+/** What `mountAsk` takes: the token provider and the Ask box's options. */
+export interface MountAskOptions extends AskOptions {
+  /** Mint on your backend with `POST /api/v1/embeds` (`resource: {type: "ask", id: <source id>}`) and return `{token, src}`. */
+  getToken: GetToken;
+  /** The page, if `getToken` does not return it: the mint response's `url` without its `#token`. */
+  src?: string;
+  /** Initial and fallback height, as the `height` attribute. Default `280px`; the frame follows its content from there. */
+  height?: string | number;
+  /** Accessible title of the frame. Default `Ask Matih`. */
+  title?: string;
+}
+
+/**
+ * Put an Ask box in `container`: a `<matih-embed kind="ask">` with the options as attributes and `getToken` as its provider.
+ * Returns the element (remove it to take the box away); calling it again replaces what was mounted.
+ */
+export function mountAsk(container: Element, options: MountAskOptions): MatihEmbed {
+  defineMatihEmbed();
+  const el = document.createElement("matih-embed") as MatihEmbed;
+  el.setAttribute("kind", "ask");
+  const attrs: [string, string | undefined][] = [
+    ["src", options.src],
+    ["theme", options.theme],
+    ["accent", options.accent],
+    ["font", options.font],
+    ["heading", options.heading],
+    ["placeholder", options.placeholder],
+    ["suggestions", Array.isArray(options.suggestions) ? options.suggestions.join("|") : options.suggestions],
+    ["height", options.height === undefined ? undefined : String(options.height)],
+    ["title", options.title],
+  ];
+  for (const [name, value] of attrs) if (value !== undefined) el.setAttribute(name, value);
+  el.getToken = options.getToken;
+  container.replaceChildren(el);
+  return el;
 }
 
 /**

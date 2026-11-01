@@ -8,7 +8,7 @@
  * by dispatching message events whose `source` and `origin` the test controls.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MatihEmbed, SANDBOX, defineMatihEmbed, parseSrc, type GetToken, type MatihErrorDetail } from "../src/index.js";
+import { MatihEmbed, SANDBOX, askParams, defineMatihEmbed, mountAsk, parseSrc, type GetToken, type MatihErrorDetail } from "../src/index.js";
 
 const SRC = "https://workspace.matih.ai/embed/dashboards/d_123?e=emt_Ab12";
 const ORIGIN = "https://workspace.matih.ai";
@@ -470,6 +470,138 @@ describe("events", () => {
     fire({ type: "matih:error", code: "spoof" }, ORIGIN, { postMessage: vi.fn() });
     expect(readyCount()).toBe(0);
     expect(errors).toEqual([]);
+  });
+});
+
+/**
+ * kind="ask" (docs/EMBEDS.md section 13 in matih-labs/mitra): the Ask box takes its look from attributes, which go in the
+ * page's query; the token stays in the fragment. New surface, not a fix.
+ * Historical FAIL evidence: not applicable (new feature, no pre-fix code).
+ */
+const ASK_SRC = "https://workspace.matih.ai/embed/ask/s_1?e=emt_Ab12";
+
+describe('kind="ask"', () => {
+  it("puts theme, accent, font, heading, placeholder and suggestions in the query, and the token in the fragment", async () => {
+    const { el } = await mount({
+      src: ASK_SRC, token: "met_abc", kind: "ask", theme: "dark", accent: "#7C3AED", font: "Georgia, serif",
+      heading: "Ask Acme", placeholder: "Try a question", suggestions: "Revenue by month|Top customers",
+    });
+    const url = new URL(el.frame!.src);
+    expect(url.pathname).toBe("/embed/ask/s_1");
+    expect(url.searchParams.get("e")).toBe("emt_Ab12");
+    expect(url.searchParams.get("theme")).toBe("dark");
+    expect(url.searchParams.get("accent")).toBe("7c3aed");
+    expect(url.searchParams.get("font")).toBe("Georgia, serif");
+    expect(url.searchParams.get("heading")).toBe("Ask Acme");
+    expect(url.searchParams.get("placeholder")).toBe("Try a question");
+    expect(url.searchParams.get("suggestions")).toBe("Revenue by month|Top customers");
+    expect(url.hash).toBe("#token=met_abc");
+    expect(url.search).not.toContain("met_abc");
+    expect(el.frame!.getAttribute("sandbox")).toBe(SANDBOX);
+  });
+
+  it("starts short and titled for what it is, and follows the frame's own height", async () => {
+    const { el, win } = await mount({ src: ASK_SRC, token: "met_abc", kind: "ask" });
+    expect(el.frame!.style.height).toBe("280px");
+    expect(el.frame!.title).toBe("Ask Matih");
+    fire({ type: "matih:resize", height: 412.2 }, ORIGIN, win);
+    expect(el.frame!.style.height).toBe("413px");
+  });
+
+  it("leaves the options off without kind=ask, and sends nothing that was not set", async () => {
+    const plain = await mount({ src: SRC, token: "met_abc", theme: "dark", heading: "x" });
+    expect(new URL(plain.el.frame!.src).search).toBe("?e=emt_Ab12");
+    expect(plain.el.frame!.style.height).toBe("640px");
+    document.body.innerHTML = "";
+    const bare = await mount({ src: ASK_SRC, token: "met_abc", kind: "ask" });
+    expect(new URL(bare.el.frame!.src).search).toBe("?e=emt_Ab12");
+  });
+
+  it("holds each option to what the page accepts, and drops the rest", async () => {
+    const { el } = await mount({
+      src: ASK_SRC, token: "met_abc", kind: "ask", theme: "neon", accent: "red", font: "x;background:url(//evil)",
+      heading: "  Ask\n  Acme  ", placeholder: "p".repeat(300), suggestions: "a|b||c|d| e |" + "z".repeat(300),
+    });
+    const q = new URL(el.frame!.src).searchParams;
+    expect(q.has("theme")).toBe(false);
+    expect(q.has("accent")).toBe(false);
+    expect(q.has("font")).toBe(false);
+    expect(q.get("heading")).toBe("Ask Acme");
+    expect(q.get("placeholder")).toHaveLength(100);
+    expect(q.get("suggestions")).toBe("a|b|c"); // three at most, empty ones skipped
+  });
+
+  it("an accent is sent lower-case without its #, three digits as they are, and auto is the default theme (not sent)", () => {
+    expect(askParams({ accent: "25c", theme: "auto" }).toString()).toBe("accent=25c");
+    expect(askParams({ accent: "#2750CC" }).get("accent")).toBe("2750cc");
+    expect(askParams({}).toString()).toBe("");
+  });
+
+  it("takes suggestions as a list too, with no | inside one, at most three", () => {
+    const q = askParams({ suggestions: ["One | Two", "Three", "Four", "Five"] });
+    expect(q.get("suggestions")).toBe("One Two|Three|Four");
+  });
+
+  it("an option the page's address already has is replaced, not doubled", async () => {
+    const { el } = await mount({ src: `${ASK_SRC}&theme=light`, token: "met_abc", kind: "ask", theme: "dark" });
+    expect(new URL(el.frame!.src).searchParams.getAll("theme")).toEqual(["dark"]);
+  });
+
+  it("reloads with the new look when an option changes", async () => {
+    const { el } = await mount({ src: ASK_SRC, token: "met_abc", kind: "ask", theme: "light" });
+    const first = el.frame!;
+    el.setAttribute("theme", "dark");
+    await el.updateComplete;
+    expect(el.frame).not.toBe(first);
+    expect(new URL(el.frame!.src).searchParams.get("theme")).toBe("dark");
+  });
+
+  it("still refuses a src with a JWT in its query, and answers a token refresh as any embed does", async () => {
+    const bad = await mount({ src: `${ASK_SRC}&x=eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln`, token: "met_abc", kind: "ask" });
+    expect(bad.errors.map((e) => e.code)).toEqual(["invalid_src"]);
+    document.body.innerHTML = "";
+    const getToken = vi.fn(async () => "met_new");
+    const { win } = await mount({ src: ASK_SRC, token: "met_abc", kind: "ask" }, { getToken });
+    fire({ type: "matih:token-expiring", embed: "emt_Ab12" }, ORIGIN, win);
+    await settle();
+    expect(getToken).toHaveBeenCalledWith({ embed: "emt_Ab12" });
+    expect(win.postMessage).toHaveBeenCalledWith({ type: "matih:token", token: "met_new" }, ORIGIN);
+  });
+});
+
+describe("mountAsk", () => {
+  it("puts an Ask element in the container, with the options as attributes and getToken as its provider", async () => {
+    const box = document.createElement("div");
+    document.body.appendChild(box);
+    const getToken = vi.fn(async () => ({ token: "met_first", src: ASK_SRC }));
+    const el = mountAsk(box, { getToken, theme: "dark", accent: "#2750cc", heading: "Ask", suggestions: ["A", "B"], height: 300, title: "Ask Acme" });
+    expect(box.firstElementChild).toBe(el);
+    expect(el.getAttribute("kind")).toBe("ask");
+    expect(el.getAttribute("suggestions")).toBe("A|B");
+    expect(el.getToken).toBe(getToken);
+    await el.updateComplete;
+    expect(getToken).toHaveBeenCalledWith({});
+    const url = new URL(el.frame!.src);
+    expect(url.pathname).toBe("/embed/ask/s_1");
+    expect(url.searchParams.get("theme")).toBe("dark");
+    expect(url.searchParams.get("suggestions")).toBe("A|B");
+    expect(url.hash).toBe("#token=met_first");
+    expect(el.frame!.style.height).toBe("300px");
+    expect(el.frame!.title).toBe("Ask Acme");
+  });
+
+  it("an src of its own wins over the provider's, and mounting again replaces the box", async () => {
+    const box = document.createElement("div");
+    document.body.appendChild(box);
+    const getToken = vi.fn(async () => ({ token: "met_first", src: "https://workspace.matih.ai/embed/ask/other?e=emt_x" }));
+    const first = mountAsk(box, { getToken, src: ASK_SRC });
+    await first.updateComplete;
+    expect(new URL(first.frame!.src).pathname).toBe("/embed/ask/s_1");
+    const second = mountAsk(box, { getToken, src: ASK_SRC });
+    await second.updateComplete;
+    expect(box.children).toHaveLength(1);
+    expect(box.firstElementChild).toBe(second);
+    expect(first.isConnected).toBe(false);
   });
 });
 

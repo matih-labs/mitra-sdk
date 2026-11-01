@@ -46,6 +46,18 @@ Viewer identity for embeds. Contract: `docs/EMBEDS.md` section 3.1b in matih-lab
 - `EmbedRefusedError.code` can now also be a viewer or key code (`external_id_missing`, `key_private`,
   ...). `EMBED_REFUSAL_CODES` is unchanged: it lists the six codes of `embeds.create` filters and origins.
 
+The Ask embed: a question box and its answers inside your own product. Contract: `docs/EMBEDS.md` section 13 in
+matih-labs/mitra.
+
+- `<matih-embed kind="ask">` shows the Ask box. Its `theme` (`light`, `dark` or `auto`), `accent` (a hex colour:
+  the send button, the focus ring and the chart's lead colour), `font`, `heading`, `placeholder` and `suggestions`
+  (up to three questions, separated by `|`) go in the page's query; the token stays in the fragment. An option that does
+  not fit what the page accepts is left out. An Ask frame starts at `280px` and follows its own `matih:resize`.
+- `mountAsk(container, {getToken, src?, theme?, accent?, font?, heading?, placeholder?, suggestions?, height?, title?})`
+  puts the element in a container and returns it; `askParams(options)` is the options as query parameters.
+- Mint with `resource: {type: "ask", id: <source id>}` (already allowed). A viewer's questions are kept apart per
+  viewer, and are limited to 20 an hour per viewer and 300 an hour per integration.
+
 ## 0.1.0 - 2026-10-31
 
 First release. The Matih public API (`/api/v1`) is rolling out to `workspace.matih.ai` now; these

@@ -19,7 +19,7 @@ MCP setup guide, an agent skill, and examples such as a Slack bot.
   an answer, the data and a chart image
 - Get a dashboard as an image
 - Ask predictive questions (forecasts, what-ifs) as background jobs
-- Embed a dashboard (with per-viewer row filters) or a Gems feed in your own product: mint a short-lived token on your backend, show it with the `<matih-embed>` element
+- Embed a dashboard (with per-viewer row filters), a Gems feed or an Ask box in your own product: mint a short-lived token on your backend, show it with the `<matih-embed>` element
 - Receive signed webhooks when long work finishes
 - Admin work with the right scopes: list and invite members, change roles, connect or remove
   sources, upload and manage files, manage webhooks
