@@ -36,7 +36,8 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "size": "node scripts/size.mjs",
+    "prepublishOnly": "npm run build && npm run size"
   },
   "dependencies": {
     "openapi-fetch": "^0.13.0"

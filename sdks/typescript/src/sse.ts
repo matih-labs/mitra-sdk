@@ -1,3 +1,5 @@
+import { ConnectionError } from "./errors.js";
+
 export interface SSEMessage {
   /** Event name; `message` when the stream did not name one. */
   event: string;
@@ -11,8 +13,14 @@ export interface SSEMessage {
  * boundaries anywhere (including inside a CRLF pair), CR, LF and CRLF line
  * endings, multi-line data, comments, and a final event with no trailing
  * blank line. Cancels the underlying stream when the consumer stops early.
+ *
+ * `idleMs` is the longest silence tolerated between two chunks (the server sends a heartbeat every
+ * 10 seconds): past it the stream is cancelled and a timeout ConnectionError is thrown.
  */
-export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEMessage, void, undefined> {
+export async function* parseSSE(
+  body: ReadableStream<Uint8Array>,
+  idleMs?: number,
+): AsyncGenerator<SSEMessage, void, undefined> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -20,6 +28,18 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerato
   let eventId: string | undefined;
   let dataLines: string[] = [];
   const ready: SSEMessage[] = [];
+
+  const read = (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    if (idleMs === undefined) return reader.read();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const idle = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new ConnectionError(`No data from the stream for ${idleMs} ms`, { category: "timeout" })),
+        idleMs,
+      );
+    });
+    return Promise.race([reader.read(), idle]).finally(() => clearTimeout(timer));
+  };
 
   const dispatch = (): void => {
     if (dataLines.length > 0) {
@@ -52,7 +72,7 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerato
 
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await read();
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
 
       const lineEnd = /\r\n|\n|\r/g;

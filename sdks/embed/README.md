@@ -120,6 +120,13 @@ el.addEventListener("matih:error", (e) => console.warn(e.detail.code));
 
 Matih also restricts who may frame the page: `frame-ancestors` is set from the origins you passed to `embeds.create`. Pass the exact origin of the page that holds `<matih-embed>`.
 
+## Performance
+
+- **Size.** One file, `dist/index.js`, about 16 KB (5 KB gzipped), no dependencies and no source map. The CI size budget fails if it grows past 20 KB.
+- **No work until the tag is used.** Importing registers the element and does nothing else; the iframe loads when it nears the viewport (`loading="lazy"`), so a page with several embeds below the fold pays for none of them up front.
+- **One token call at a time.** With `token-endpoint` or `getToken` the element asks your backend when it mounts, and again only when the frame reports `matih:token-expiring`; a burst of expiry messages shares one call. Each call has a 15 second timeout.
+- **Mint late.** With a fixed `token` attribute, a token minted long before a lazy frame is first scrolled into view can expire first; mint it when the page is shown, or use `token-endpoint` or `getToken` so the element refreshes it.
+
 ## Several tag names, SSR
 
 `defineMatihEmbed("my-embed")` registers a second tag (a subclass, since one constructor can be registered once). Importing the module on a server, where there is no `HTMLElement`, does nothing.
