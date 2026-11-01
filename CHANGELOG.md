@@ -4,33 +4,9 @@ All notable changes are listed here. The Python and TypeScript SDKs share one ve
 released together: one tag `vX.Y.Z` publishes `mitra-sdk` to PyPI and `@matihlabs/mitra` and
 `@matihlabs/embed` to npm.
 
-## Unreleased
+## 0.1.0 - 2026-11-01
 
-Embeds: show a dashboard or a Gems feed inside your own product. Contract: `docs/EMBEDS.md` in
-matih-labs/mitra.
-
-- Python `client.embeds.create(resource=, filters=, origins=, ttl_seconds=)`, `.list()` and
-  `.revoke(id)` on `Mitra` and `AsyncMitra` (`list` returns `{embeds: [...]}` with `kind`, `resource`,
-  `title`, `origins`, `created_at`, `expires_at`, `revoked_at`, `key` and `member`), and TypeScript `mitra.embeds.create/list/revoke`.
-  Typed `Embed` (the `met_` token is kept out of `repr`), `embed_src` / `embedSrc` (the iframe URL
-  without its `#token=` fragment). Minting is not idempotent: no `Idempotency-Key`, and never
-  retried after a 5xx.
-- A 422 on the embeds routes raises `EmbedRefusedError` with `code` one of `missing_parameter`,
-  `unknown_parameter`, `invalid_value`, `invalid_origin`, `filters_not_supported`,
-  `no_embed_parameters`; a 404 raises `EmbedNotFoundError`.
-- New scopes `embeds:create` (mint, revoke) and `embeds:read` (list), and an Embeds product.
-- New npm package `@matihlabs/embed`: the `<matih-embed>` web component. Token only in the URL
-  fragment, `sandbox="allow-scripts allow-same-origin"`, `referrerpolicy="no-referrer"`, answers
-  `matih:token-expiring` only from the iframe's own window and origin and replies to that exact
-  origin, never `"*"`. Follows the embed page's `matih:resize` height (taken only from its own
-  frame and origin, capped), with `height` as the initial value. Emits `matih:ready` and
-  `matih:error`. It joins the release workflow.
-- `examples/embed/`: a Node (`node:http`) and a Python example that mint and show an embed.
-
-## 0.1.0 - 2026-10-31
-
-First release. The Matih public API (`/api/v1`) is rolling out to `workspace.matih.ai` now; these
-SDKs target it, and a call against a workspace it has not reached yet fails.
+First release. These SDKs target the Matih public API (`/api/v1`), live on `workspace.matih.ai`.
 
 - Python SDK `mitra-sdk` (`Mitra` and `AsyncMitra`, pydantic models, SSE streaming, job polling,
   webhook signature verification) and TypeScript SDK `@matihlabs/mitra` (typed client, SSE async
@@ -58,3 +34,26 @@ SDKs target it, and a call against a workspace it has not reached yet fails.
   `/api/v1/mcp`).
 - Agent skill `skills/matih`, MCP connection guide, curl and plain-HTTP examples in six languages,
   Slack bot example, OpenAPI sync workflow and CI.
+
+### Embeds
+
+Embeds: show a dashboard or a Gems feed inside your own product. Contract: `docs/EMBEDS.md` in
+matih-labs/mitra.
+
+- Python `client.embeds.create(resource=, filters=, origins=, ttl_seconds=)`, `.list()` and
+  `.revoke(id)` on `Mitra` and `AsyncMitra` (`list` returns `{embeds: [...]}` with `kind`, `resource`,
+  `title`, `origins`, `created_at`, `expires_at`, `revoked_at`, `key` and `member`), and TypeScript `mitra.embeds.create/list/revoke`.
+  Typed `Embed` (the `met_` token is kept out of `repr`), `embed_src` / `embedSrc` (the iframe URL
+  without its `#token=` fragment). Minting is not idempotent: no `Idempotency-Key`, and never
+  retried after a 5xx.
+- A 422 on the embeds routes raises `EmbedRefusedError` with `code` one of `missing_parameter`,
+  `unknown_parameter`, `invalid_value`, `invalid_origin`, `filters_not_supported`,
+  `no_embed_parameters`; a 404 raises `EmbedNotFoundError`.
+- New scopes `embeds:create` (mint, revoke) and `embeds:read` (list), and an Embeds product.
+- New npm package `@matihlabs/embed`: the `<matih-embed>` web component. Token only in the URL
+  fragment, `sandbox="allow-scripts allow-same-origin"`, `referrerpolicy="no-referrer"`, answers
+  `matih:token-expiring` only from the iframe's own window and origin and replies to that exact
+  origin, never `"*"`. Follows the embed page's `matih:resize` height (taken only from its own
+  frame and origin, capped), with `height` as the initial value. Emits `matih:ready` and
+  `matih:error`. It joins the release workflow.
+- `examples/embed/`: a Node (`node:http`) and a Python example that mint and show an embed.
