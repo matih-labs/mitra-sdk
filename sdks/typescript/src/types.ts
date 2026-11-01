@@ -603,7 +603,8 @@ export interface CreateInvitationParams {
 }
 
 /** `dashboard`, or `gems` (then the `id` is the source, i.e. connection, id). */
-export type EmbedResourceType = "dashboard" | "gems";
+/** `ask` is an Ask embed of a source (`id` is the connection id); its token and frame check exist, the conversation is a later step. */
+export type EmbedResourceType = "dashboard" | "gems" | "ask";
 
 export interface EmbedResource {
   type: EmbedResourceType;
@@ -624,6 +625,8 @@ export interface Embed {
   url: string;
   resource: EmbedResource;
   origins: string[];
+  /** The viewer this token vouches for, when you passed one: `vwr_...`, not secret. */
+  viewer?: { id: string };
 }
 
 /** A token minted by this key, as `embeds.list` shows it. Never carries the secret or filter values. */
@@ -641,6 +644,8 @@ export interface EmbedSummary {
   key?: { integration_id?: string; key_prefix?: string; integration_name?: string } | null;
   /** The member that key acts as. */
   member?: { user_id?: string; name?: string } | null;
+  /** The viewer the token vouches for (`vwr_...`), or null. */
+  viewer?: { id: string } | null;
 }
 
 export interface EmbedList {
@@ -658,6 +663,66 @@ export interface CreateEmbedParams {
   filters?: Record<string, string | number>;
   /** 60 to 900, default 300. A token is never renewed: mint a new one. */
   ttlSeconds?: number;
+  /**
+   * Your end user this token is for. Viewers are told apart by `external_id` alone (your own id for
+   * them), never by email or phone. Frozen on the token. A refusal is `EmbedRefusedError` with the
+   * claim's `code` (`external_id_missing`, `email_invalid`, `attribute_value_invalid`, ...).
+   */
+  viewer?: EmbedViewer;
+}
+
+/** The end user an embed token vouches for (docs/EMBEDDED_ANALYTICS.md section 1). */
+export interface EmbedViewer {
+  /** Your id for this person, at most 128 characters. Required. */
+  external_id: string;
+  name?: string;
+  email?: string;
+  /** E.164: `+919800000042`. */
+  phone?: string;
+  /** A language tag such as `en-IN`. */
+  locale?: string;
+  /** Strings, numbers, or lists of those, as the workspace's row policies read them. */
+  attributes?: Record<string, string | number | Array<string | number>>;
+}
+
+/** `RS256` (RSA, 2048 bits or more), `ES256` (P-256) or `EdDSA` (Ed25519). HS256 is never accepted. */
+export type EmbedSigningAlg = "RS256" | "ES256" | "EdDSA";
+
+/** A public JWK as `embeds.keys` returns it: the public half only. */
+export type EmbedPublicJwk = Record<string, string>;
+
+export interface AddEmbedSigningKeyParams {
+  /** The PUBLIC half: a PEM string (`-----BEGIN PUBLIC KEY-----`) or a JWK object. A private key is refused (`key_private`) and never stored. */
+  publicKey: string | EmbedPublicJwk;
+  /** The `kid` your tokens carry in their header. Unique for the integration, even among revoked keys; defaults to the JWK's own `kid`. */
+  kid?: string;
+  /** Inferred from the key when absent. */
+  alg?: EmbedSigningAlg;
+}
+
+/** A registered signing key. Never carries anything private. */
+export interface EmbedSigningKey {
+  /** `esk_...` */
+  id: string;
+  kid: string;
+  alg: EmbedSigningAlg;
+  public_key: EmbedPublicJwk;
+  created_at: string;
+  /** When it was revoked; null while live. */
+  revoked_at: string | null;
+}
+
+export interface EmbedSigningKeyList {
+  keys: EmbedSigningKey[];
+}
+
+/**
+ * The origins an integration's own signed tokens may be framed by (`embeds.origins`). The
+ * page URL carries only the integration id, never the token, so this is what the frame check
+ * uses; a token's own `matih.origins` must be among them. Empty until registered.
+ */
+export interface EmbedOrigins {
+  origins: string[];
 }
 
 export interface ConversationMessage {
@@ -695,6 +760,8 @@ export function isTerminalJob(job: Pick<Job, "state">): boolean {
 /**
  * The embed URL without its fragment, which is where the token lives. This is the value for
  * the `src` attribute of `<matih-embed>`; it keeps the `?e=` token id the frame check needs.
+ * (For a token you sign yourself, `src` is `https://workspace.matih.ai/embed/dashboards/d_123?e=<integration id>`:
+ * the JWT is never in a URL query, only in the `token` attribute or `getToken`.)
  */
 export function embedSrc(embed: Embed | string): string {
   const url = typeof embed === "string" ? embed : embed.url;

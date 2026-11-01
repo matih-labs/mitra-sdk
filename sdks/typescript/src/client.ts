@@ -18,7 +18,11 @@ import type {
   Conversation,
   ConversationList,
   ConnectorList,
+  AddEmbedSigningKeyParams,
   CreateEmbedParams,
+  EmbedOrigins,
+  EmbedSigningKey,
+  EmbedSigningKeyList,
   CreateInvitationParams,
   CreateSourceParams,
   CreateWebhookParams,
@@ -735,20 +739,115 @@ class WebhooksApi {
   }
 }
 
-class EmbedsApi {
+/**
+ * The public keys your backend signs viewer tokens with (`/embeds/keys`, docs/EMBEDDED_ANALYTICS.md
+ * section 1b). Needs `embeds:create`. Register the PUBLIC half only: a private key is refused and
+ * never stored. Errors map like `embeds.create`: 422 `EmbedRefusedError` (read `code`:
+ * `key_private`, `key_invalid`, `alg_unsupported`, `key_too_weak`, `kid_missing`), 404
+ * `EmbedNotFoundError`; 409 (`kid_taken`, `too_many_keys`) is the default conflict error.
+ */
+class EmbedKeysApi {
   constructor(private readonly http: HttpClient) {}
+
+  /** Register a public key (HTTP 201). An integration has at most 5 live keys. */
+  add(params: AddEmbedSigningKeyParams, opts?: RequestOptions): Promise<EmbedSigningKey> {
+    if (typeof params.publicKey !== "string" && (typeof params.publicKey !== "object" || params.publicKey === null)) {
+      return Promise.reject(new TypeError("embeds.keys.add: publicKey must be a PEM string or a JWK object"));
+    }
+    const body: Record<string, unknown> = { public_key: params.publicKey };
+    if (params.kid !== undefined) body["kid"] = params.kid;
+    if (params.alg !== undefined) body["alg"] = params.alg;
+    return this.http.json<EmbedSigningKey>({
+      method: "POST",
+      path: "/embeds/keys",
+      json: body,
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+
+  /** This integration's keys, live and revoked, oldest first. */
+  list(opts?: RequestOptions): Promise<EmbedSigningKeyList> {
+    return this.http.json<EmbedSigningKeyList>({
+      method: "GET",
+      path: "/embeds/keys",
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+
+  /** Revoke a key by its `esk_...` id (HTTP 204, idempotent). Tokens it signed stop at their next request. */
+  async revoke(id: string, opts?: RequestOptions): Promise<void> {
+    await this.http.send({
+      method: "DELETE",
+      path: `/embeds/keys/${enc(id)}`,
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+}
+
+/**
+ * The origins your own signed tokens may be framed by (`/embeds/origins`). Needs `embeds:create`.
+ * The page URL of a token you sign carries only your integration's id (`?e=<integration id>`),
+ * never the JWT, so the frame check uses these: 1 to 10 exact origins, validated like a mint's.
+ * A token whose `matih.origins` are not among them is refused (`origins_not_registered`).
+ * A 422 is `EmbedRefusedError` (`invalid_origin`).
+ */
+class EmbedOriginsApi {
+  constructor(private readonly http: HttpClient) {}
+
+  /** The registered origins; empty until set. */
+  get(opts?: RequestOptions): Promise<EmbedOrigins> {
+    return this.http.json<EmbedOrigins>({
+      method: "GET",
+      path: "/embeds/origins",
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+
+  /** Replace the registered origins (1 to 10, `https` except `http://localhost`). Returns them as stored (lower case). */
+  set(origins: readonly string[], opts?: RequestOptions): Promise<EmbedOrigins> {
+    if (!Array.isArray(origins) || origins.some((o) => typeof o !== "string")) {
+      return Promise.reject(new TypeError("embeds.origins.set: origins must be an array of strings"));
+    }
+    return this.http.json<EmbedOrigins>({
+      method: "PUT",
+      path: "/embeds/origins",
+      json: { origins },
+      request: opts,
+      mapError: embedErrorFromResponse,
+    });
+  }
+}
+
+class EmbedsApi {
+  /** The public keys you sign viewer tokens with: `add`, `list`, `revoke`. */
+  readonly keys: EmbedKeysApi;
+  /** The origins your own signed tokens may be framed by: `get`, `set`. */
+  readonly origins: EmbedOriginsApi;
+
+  constructor(private readonly http: HttpClient) {
+    this.keys = new EmbedKeysApi(http);
+    this.origins = new EmbedOriginsApi(http);
+  }
 
   /**
    * Mint a short-lived embed token (`POST /embeds`; free; every call mints a new one, so it is
    * never retried after a 5xx). Needs `embeds:create`. Call it from your backend: the API key
    * must never reach the browser. Pass `embedSrc(embed)` and `embed.token` to `<matih-embed>`.
    *
+   * Pass `viewer` to vouch for your end user (`{ external_id, name?, email?, phone?, locale?,
+   * attributes? }`); the response then carries `viewer.id`. To skip this call per page, sign the
+   * token yourself instead: see `embeds.keys` and the README.
+   *
    * Throws EmbedRefusedError (422, read `code`), EmbedNotFoundError (404) or PermissionError (403).
    */
   create(params: CreateEmbedParams, opts?: RequestOptions): Promise<Embed> {
     const r = params.resource as { type?: unknown; id?: unknown } | undefined;
     if (!r || typeof r.type !== "string" || typeof r.id !== "string") {
-      return Promise.reject(new TypeError('embeds.create: resource must be { type: "dashboard" | "gems", id }'));
+      return Promise.reject(new TypeError('embeds.create: resource must be { type: "dashboard" | "gems" | "ask", id }'));
     }
     if (!Array.isArray(params.origins) || params.origins.length === 0) {
       return Promise.reject(new TypeError("embeds.create: origins must be a non-empty array of exact origins"));
@@ -759,6 +858,7 @@ class EmbedsApi {
     };
     if (params.filters !== undefined) body["filters"] = params.filters;
     if (params.ttlSeconds !== undefined) body["ttl_seconds"] = params.ttlSeconds;
+    if (params.viewer !== undefined) body["viewer"] = params.viewer;
     return this.http.json<Embed>({
       method: "POST",
       path: "/embeds",

@@ -4,6 +4,39 @@ All notable changes are listed here. The Python and TypeScript SDKs share one ve
 released together: one tag `vX.Y.Z` publishes `mitra-sdk` to PyPI and `@matihlabs/mitra` and
 `@matihlabs/embed` to npm.
 
+## Unreleased
+
+Viewer identity for embeds. Contract: `docs/EMBEDS.md` section 3.1b in matih-labs/mitra.
+
+- `embeds.create` takes `viewer` (`{external_id, name?, email?, phone?, locale?, attributes?}`;
+  Python `viewer=`, TypeScript `viewer`) and the response carries `viewer.id`. `resource.type` also
+  allows `"ask"`. A viewer is told apart by `external_id` alone, never by email or phone.
+- `embeds.keys.add`, `.list` and `.revoke` register the public keys you sign viewer JWTs with
+  (Python `EmbedSigningKey`, `EmbedSigningKeyList`; TypeScript `EmbedSigningKey`,
+  `EmbedSigningKeyList`, `AddEmbedSigningKeyParams`). A private key is refused and never stored.
+  Both READMEs show how to sign a token with PyJWT and with `jose`; no signing dependency is added.
+- `embeds.origins.get()` and `.set(origins)` (`GET` and `PUT /embeds/origins`; Python `EmbedOrigins`,
+  TypeScript `EmbedOrigins`) register the 1 to 10 origins a token you sign yourself may be framed by.
+  The page URL of such a token is `...?e=<integration id>`: the JWT is never in a URL query (it carries
+  the viewer's email, phone and attributes), only in `<matih-embed>`'s `token` attribute, `getToken`
+  or a `matih:token` message. `<matih-embed>` refuses a `src` that has a JWT in its query
+  (`invalid_src`) and takes a JWT as the token like a `met_` secret. A token whose origins are not
+  among the registered ones is refused (`origins_not_registered`).
+- `EmbedRefusedError.code` can now also be a viewer or key code (`external_id_missing`, `key_private`,
+  ...). `EMBED_REFUSAL_CODES` is unchanged: it lists the six codes of `embeds.create` filters and origins.
+
+The Ask embed: a question box and its answers inside your own product. Contract: `docs/EMBEDS.md` section 14 in
+matih-labs/mitra.
+
+- `<matih-embed kind="ask">` shows the Ask box. Its `theme` (`light`, `dark` or `auto`), `accent` (a hex colour:
+  the send button, the focus ring and the chart's lead colour), `font`, `heading`, `placeholder` and `suggestions`
+  (up to three questions, separated by `|`) go in the page's query; the token stays in the fragment. An option that does
+  not fit what the page accepts is left out. An Ask frame starts at `280px` and follows its own `matih:resize`.
+- `mountAsk(container, {getToken, src?, theme?, accent?, font?, heading?, placeholder?, suggestions?, height?, title?})`
+  puts the element in a container and returns it; `askParams(options)` is the options as query parameters.
+- Mint with `resource: {type: "ask", id: <source id>}` (already allowed). A viewer's questions are kept apart per
+  viewer, and are limited to 20 an hour per viewer and 300 an hour per integration.
+
 ## 0.1.1 - 2026-11-01
 
 Performance and timeouts, from a review of connection reuse, timeouts, retries and package size.

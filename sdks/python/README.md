@@ -122,21 +122,23 @@ client.members.update("mem_1", "admin"); client.members.remove("mem_1")
 
 ## Embeds
 
-Show a dashboard (with per-viewer row filters) or a Gems feed inside your own product. Needs
-`embeds:create` (mint, revoke) or `embeds:read` (list). Call it from your backend: the API key
+Show a dashboard (with per-viewer row filters), a Gems feed or Ask inside your own product. Needs
+`embeds:create` (mint, revoke, keys) or `embeds:read` (list). Call it from your backend: the API key
 never goes to the browser. The browser gets only the short-lived token, through the
 `<matih-embed>` element (`@matihlabs/embed`, see `sdks/embed/`).
 
 ```python
 embed = client.embeds.create(
-    resource={"type": "dashboard", "id": "d_123"},   # or {"type": "gems", "id": "<source id>"}
+    resource={"type": "dashboard", "id": "d_123"},   # or {"type": "gems" | "ask", "id": "<source id>"}
     filters={"customer_id": "C123"},                  # exactly the dashboard's embed parameters; none for Gems
     origins=["https://app.customer.com"],             # 1 to 10 exact origins that may frame the page
     ttl_seconds=300,                                  # 60 to 900, default 300; never renewed, mint again
+    viewer={"external_id": "cust-42", "name": "Asha Rao", "attributes": {"plan": "pro"}},  # optional: your end user
 )
 embed.src     # the iframe URL without the token (keeps ?e=emt_...)
 embed.token   # met_..., a secret; left out of repr
 embed.id      # emt_..., not secret: pass it to revoke
+embed.viewer  # EmbedViewerRef(id="vwr_..."), when you passed a viewer
 
 client.embeds.list()            # tokens minted by this key (never the secret or filter values)
 client.embeds.revoke(embed.id)  # 204, idempotent, returns None
@@ -148,6 +150,69 @@ Minting is not idempotent (every call mints) and is never retried after a 5xx. A
 `no_embed_parameters`; an unknown or unreadable dashboard or source raises `EmbedNotFoundError`
 (404); a role that no longer allows it is a `PermissionDeniedError` (403). `AsyncMitra` is the
 same with `await`.
+
+### Viewers and tokens you sign yourself
+
+A `viewer` is your end user. Only `external_id` (your own id, at most 128 characters) is required,
+and it alone tells viewers apart: Matih never matches a viewer by email or phone, so two people
+sharing an email are two viewers. `name`, `email`, `phone` (E.164), `locale` (`en-IN`) and
+`attributes` (strings, numbers, or lists of those) are what the workspace's row policies and
+Matih's own screens can use. A bad viewer is an `EmbedRefusedError` whose `.code` names the claim
+(`external_id_missing`, `email_invalid`, `attribute_value_invalid`, ...), never the value.
+
+To skip a call per page, sign the token yourself. Register the public half of a key once, then
+your backend signs short-lived JWTs (RS256, ES256 or EdDSA; HS256 is refused):
+
+```python
+# Once. Only the PUBLIC key: a private key is refused (`key_private`) and never stored.
+key = client.embeds.keys.add(public_key=public_pem, kid="k1")   # key.id is esk_...
+client.embeds.keys.list()            # live and revoked keys
+client.embeds.keys.revoke(key.id)    # 204; tokens it signed stop at their next request
+# Where your pages may be framed (1 to 10 exact origins; replaces the list). The page URL names only your
+# integration, never the token, so the frame check uses these; a token's own origins must be among them.
+client.embeds.origins.set(["https://app.customer.com"])   # EmbedOrigins(origins=[...])
+client.embeds.origins.get()                                # origins == [] until set
+
+# Per page, on your backend (here with PyJWT and `cryptography`; any JWT library works).
+import time, uuid
+import jwt
+
+now = int(time.time())
+token = jwt.encode(
+    {
+        "iss": integration_id,                  # your integration's id
+        "aud": "matih",
+        "sub": "cust-42",                       # the viewer's external_id
+        "jti": str(uuid.uuid4()),               # required, never reused
+        "iat": now,
+        "exp": now + 300,                       # at most 900 s after iat
+        "matih": {
+            "resource": {"type": "dashboard", "id": "d_123"},
+            "origins": ["https://app.customer.com"],
+            "filters": {"customer_id": "C123"},
+            "viewer": {"name": "Asha Rao", "attributes": {"plan": "pro"}},  # no external_id: `sub` is it
+        },
+    },
+    private_pem,
+    algorithm="ES256",
+    headers={"kid": "k1"},                      # kid is required
+)
+# Give the page {"token": token, "src": f"https://workspace.matih.ai/embed/dashboards/d_123?e={integration_id}"}.
+```
+
+The JWT never goes in a URL query: it carries the viewer's email, phone and attributes, and a query
+string reaches access logs, `Referer` headers and browser history. `src` names only your
+integration (`?e=<integration id>`, not secret and not personal) and the JWT travels in
+`<matih-embed>`'s `token` attribute or `getToken`, which put it in the URL fragment and a message,
+never a query. `src` with a JWT in its query is refused, by `<matih-embed>` and by Matih's frame
+check. Register your origins with `embeds.origins.set` first: a token whose `origins` are not among
+them is refused (`origins_not_registered`), and one shown on a site that is not among them is a 403
+`origin_not_allowed`. A refused JWT is a 401 whose `code` is `jwt_alg`, `jwt_kid_missing`,
+`jwt_unknown_key`, `jwt_key_revoked`, `jwt_signature`, `jwt_expired`, `jwt_claims` or `jwt_replay`,
+or the finer code of the claim that failed (`invalid_origin`, `origins_not_registered`, `invalid_resource`, a viewer code).
+Key errors from `embeds.keys` are `EmbedRefusedError` with `.code` one of `key_private`,
+`key_invalid`, `alg_unsupported`, `alg_mismatch`, `key_too_weak`, `kid_missing`, `kid_invalid`; a
+reused `kid` or a sixth live key is a `BusyError` (409).
 
 ## Webhooks
 

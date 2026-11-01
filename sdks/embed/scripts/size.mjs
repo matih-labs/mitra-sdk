@@ -7,8 +7,8 @@ import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 
 const BUDGET = {
-  tarballBytes: 16 * 1024,
-  indexJsBytes: 20 * 1024,
+  tarballBytes: 20 * 1024, // 0.1.1 with the Ask box (kind="ask", mountAsk) and signed-token checks: 16.9 KB
+  indexJsBytes: 24 * 1024, // 0.1.1: 21.4 KB
   indexJsGzippedBytes: 8 * 1024, // what a page downloads
 };
 

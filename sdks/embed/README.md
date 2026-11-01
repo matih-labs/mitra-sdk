@@ -1,6 +1,6 @@
 # @matihlabs/embed
 
-`<matih-embed>`: a Matih dashboard or Gems feed inside your own product, in an iframe, with the signed embed token kept out of the URL query and renewed from your backend before it expires.
+`<matih-embed>`: a Matih dashboard, Gems feed or Ask box inside your own product, in an iframe, with the signed embed token kept out of the URL query and renewed from your backend before it expires.
 
 No runtime dependencies. Plain TypeScript compiled to ESM. Works in any framework, or none.
 
@@ -73,8 +73,8 @@ el.getToken = async ({ embed }) => {
 
 | Name | Meaning |
 |---|---|
-| `src` | The `url` from the mint response, without `#token=...`. It includes `?e=emt_...`, which the embed page needs. Required unless the token provider also returns it. Must be an absolute `https` URL (`http` only for `localhost` and `127.0.0.1`), without credentials. |
-| `token` | The `met_...` token from the same mint, used for the first load. Optional when a provider is set. |
+| `src` | The `url` from the mint response, without `#token=...`. It includes `?e=emt_...`, which the embed page needs. For a token you sign yourself it is `https://workspace.matih.ai/embed/dashboards/d_123?e=<your integration id>`. Required unless the token provider also returns it. Must be an absolute `https` URL (`http` only for `localhost` and `127.0.0.1`), without credentials, and with no JWT in its query: a viewer token carries the viewer's email, phone and attributes, which must never reach access logs, `Referer` headers or history (a `src` that has one fails with `invalid_src`). |
+| `token` | The `met_...` token from the same mint, or the JWT your backend signed for the viewer, used for the first load. It goes only in the iframe URL's fragment. Optional when a provider is set. |
 | `token-endpoint` | A URL on your site. The element `POST`s `application/json` to it (`{}` first, then `{"embed":"emt_..."}` on refresh, cookies sent same-origin) and expects `{"token": "met_...", "src": "..."}`. `src` is only read when the `src` attribute is not set. |
 | `getToken` (property) | `(request: {embed?: string}) => string | {token, src?} | Promise<...>`. Takes precedence over `token-endpoint`. |
 | `height` | The initial height, and the fallback: a number (pixels) or a length in `px`, `vh`, `rem`, `em`, `%`. Default `640px`. Once the embed page reports its content height (`matih:resize`) the frame follows it. |
@@ -83,6 +83,48 @@ el.getToken = async ({ embed }) => {
 The frame resizes itself: the embed page posts `{type:"matih:resize", height}` (pixels) and the element applies it, rounded up and capped at 20,000 px. It only listens to its own frame at its own origin. Setting `height` again puts the frame back to that value until the next resize.
 
 A `token` attribute is used once. When the element is moved in the DOM or `src` changes, and a provider exists, it asks the provider for a fresh token instead of reusing the old one (tokens are never renewable and may have expired).
+
+### The Ask box (`kind="ask"`)
+
+A question field, three steps of progress and one answer, in the same iframe and with the same token handshake. Mint with `resource: {"type": "ask", "id": "<source id>"}`; the `url` it returns is `.../embed/ask/<source id>?e=emt_...`.
+
+```html
+<matih-embed
+  kind="ask"
+  token-endpoint="/api/matih-ask-token"
+  theme="auto"
+  accent="#2750cc"
+  heading="Ask about your orders"
+  placeholder="Ask anything about your orders"
+  suggestions="Revenue by month|Top customers|Orders this week"
+></matih-embed>
+```
+
+Or from a script, which also takes the options as plain values:
+
+```ts
+import { mountAsk } from "@matihlabs/embed";
+
+mountAsk(document.getElementById("ask")!, {
+  getToken: async () => (await fetch("/api/matih-ask-token", { method: "POST" })).json(), // { token, src }
+  theme: "dark",
+  accent: "#7c3aed",
+  suggestions: ["Revenue by month", "Top customers"],
+});
+```
+
+| Attribute | Meaning |
+|---|---|
+| `kind` | `ask` for the Ask box. Without it the options below are ignored. |
+| `theme` | `light`, `dark` or `auto` (the visitor's own setting; the default). |
+| `accent` | A hex colour (`#2750cc`, `2750cc` or `#25c`). It colours the send button, the focus ring and the chart's lead colour, and nothing else. |
+| `font` | A plain font stack such as `Georgia, serif` (letters, digits, spaces and `, ' " -`, at most 80 characters). The default is a system sans-serif. |
+| `heading`, `placeholder` | The line above the field (80 characters) and the field's placeholder (100). |
+| `suggestions` | Up to three questions shown as chips, separated by `\|`. When none are set, the box offers the visitor's own recent questions. |
+
+Each option is held to what the page accepts and anything else is left out, so the page shows its own default. They go in the page's query (they are not secret); the token still goes only in the fragment. An Ask frame starts at `280px` (`height` changes that) and follows its own content from there.
+
+The box has no navigation, history list, settings or technical detail; the Matih mark at its foot names the product and links to matih.ai. Questions are limited to 20 an hour per viewer and 300 an hour per integration; past that the box says so in words and tells the visitor to try later. Pass `viewer` when you mint, or sign a viewer token, so each visitor's conversations stay their own (without one, everyone who uses the same embed token shares its conversations).
 
 ### Events
 
