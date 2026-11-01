@@ -1,6 +1,6 @@
 {
   "name": "@matihlabs/mitra",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript client for the Mitra public API: ask questions of your data, generate Gems, render dashboards, run predictions.",
   "license": "Apache-2.0",
   "repository": {

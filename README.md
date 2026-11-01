@@ -5,7 +5,7 @@
 Client-side tools for the Matih public API: the OpenAPI spec, Python and TypeScript SDKs, an
 MCP setup guide, an agent skill, and examples such as a Slack bot.
 
-> **Version 0.1.0.** The versioned API (`/api/v1`) is live on `workspace.matih.ai`. Install
+> **Version 0.1.1.** The versioned API (`/api/v1`) is live on `workspace.matih.ai`. Install
 > `mitra-sdk` from PyPI or `@matihlabs/mitra` and `@matihlabs/embed` from npm; see
 > [CHANGELOG.md](CHANGELOG.md) for what each release covers.
 
