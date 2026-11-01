@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 
 const BUDGET = {
-  tarballBytes: 40 * 1024, // 0.1.0 was 45 KB with maps; about 30 KB without
+  tarballBytes: 44 * 1024, // 0.1.0 was 45 KB with maps; about 30 KB without; 0.1.1 41.2 KB with embeds keys, origins and viewers
   unpackedBytes: 150 * 1024,
   gzippedJsBytes: 22 * 1024, // all dist/*.js compressed together, what a bundler's output pays at most
   runtimeDependencies: ["openapi-fetch"],
