@@ -4,7 +4,7 @@
 
 No runtime dependencies. Plain TypeScript compiled to ESM. Works in any framework, or none.
 
-> Pre-release. The embeds API (`POST /api/v1/embeds`) is rolling out with the rest of `/api/v1`; see the repository README for status.
+> Version 0.1.0. The embeds API (`POST /api/v1/embeds`) is live on `workspace.matih.ai` with the rest of `/api/v1`.
 
 ## How it fits together
 
