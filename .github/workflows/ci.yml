@@ -65,6 +65,8 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      - name: Size budgets
+        run: npm run size
 
   embed:
     runs-on: ubuntu-latest
@@ -91,6 +93,8 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      - name: Size budgets
+        run: npm run size
 
   slack-bot:
     runs-on: ubuntu-latest

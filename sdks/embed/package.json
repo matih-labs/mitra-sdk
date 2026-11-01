@@ -1,6 +1,6 @@
 {
   "name": "@matihlabs/embed",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The <matih-embed> web component: a Matih dashboard, Gems feed or Ask box in an iframe, with the signed token kept out of the URL query and refreshed from your backend.",
   "license": "Apache-2.0",
   "repository": {
@@ -33,7 +33,8 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "size": "node scripts/size.mjs",
+    "prepublishOnly": "npm run build && npm run size"
   },
   "devDependencies": {
     "jsdom": "^25.0.1",

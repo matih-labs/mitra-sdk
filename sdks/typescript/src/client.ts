@@ -98,11 +98,17 @@ export interface MitraOptions {
   language?: string;
   /** Custom fetch implementation, e.g. for tests or proxies. */
   fetch?: typeof fetch;
-  /** Per-attempt timeout in milliseconds. Default 60000. */
+  /**
+   * Per-attempt timeout in milliseconds, covering the response headers (and, for a stream, each gap between
+   * events). Default 60000. A request that asks the server to wait gets that wait plus 15 s instead.
+   */
   timeoutMs?: number;
-  /** Retries for 429 and for 5xx or network failures on safe calls. Default 2. */
+  /**
+   * Retries for 429 (always), and for 408, 5xx and network failures on safe calls (GET, PUT, DELETE, or a call
+   * with an idempotency key). Default 2. Sleeping across all retries of one call is capped at 60 s.
+   */
   maxRetries?: number;
-  /** Base delay for exponential backoff, in milliseconds. Default 500. */
+  /** Base delay for exponential backoff with jitter, in milliseconds, capped at 8 s per wait. Default 500. */
   retryBaseDelayMs?: number;
 }
 
@@ -1039,7 +1045,7 @@ export class Mitra {
         requestId: res.headers.get("x-request-id") ?? undefined,
       });
     }
-    for await (const message of parseSSE(res.body)) {
+    for await (const message of parseSSE(res.body, opts?.timeoutMs ?? this.http.config.timeoutMs)) {
       const event: StreamEvent = { event: message.event, data: tryParseJson(message.data) };
       if (message.id !== undefined) event.id = message.id;
       yield event;

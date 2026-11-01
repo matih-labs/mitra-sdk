@@ -9,4 +9,4 @@ An agent skill that teaches an AI assistant to use Matih well: ask questions of 
 
 To use it with Claude Code, copy this folder to `~/.claude/skills/matih` (or `.claude/skills/matih` in a project). Give the assistant a Matih credential from `Settings › API & MCP` in `MATIH_API_KEY` for REST, or connect the MCP server as described in `../../mcp/README.md`.
 
-The v1 API is rolling out to workspace.matih.ai now, so a workspace may not have it on yet.
+The v1 API is live on workspace.matih.ai.

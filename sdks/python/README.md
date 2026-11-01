@@ -6,11 +6,8 @@ Python client for the Matih public API. Sync (`Mitra`) and async (`AsyncMitra`) 
 [httpx](https://www.python-httpx.org/), pydantic v2 models for the main response shapes, SSE
 streaming, background-job polling and webhook signature verification.
 
-> Pre-release (0.1.0): the package is not on PyPI until `/api/v1` is live for every workspace. Install from a checkout with
-> `pip install -e sdks/python`.
-
 ```bash
-pip install mitra-sdk        # once released
+pip install mitra-sdk
 ```
 
 Python 3.10+. The package imports as `mitra`.
@@ -282,6 +279,44 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## Performance and timeouts
+
+**Make one client and reuse it.** `Mitra` and `AsyncMitra` keep a connection pool, so the TCP and TLS
+handshake is paid once, not on every call. Measured against `workspace.matih.ai` from a laptop
+(unauthenticated `GET`, 40 calls each): about 216 ms median with a reused connection and about 739 ms
+with a new connection per call; the same probe to a nearby control host went from 17 ms to 85 ms.
+Use `with Mitra() as client:` or call `client.close()` when you are done. A client is safe to share
+between threads, and an `AsyncMitra` between tasks (not between event loops).
+
+```python
+client = Mitra(
+    timeout=60,                    # read, write and pool wait, per attempt (seconds)
+    connect_timeout=10,            # opening the connection, per attempt
+    max_retries=2,
+    max_connections=100,           # in flight at once; more callers wait for a free connection
+    max_keepalive_connections=20,  # idle connections kept warm
+    keepalive_expiry=30,           # close an idle connection after this long (the server drops them at about 70 s)
+    http2=False,                   # pip install "mitra-sdk[http2]", then True: one connection, many calls at once
+)
+```
+
+- **Timeouts are per attempt and per phase** (connect, read, write, pool), not one number for everything.
+  A call that asks the server to wait (`wait=N` sends `Prefer: wait=N`) gets a read timeout of that wait
+  plus 15 s, so a long poll is not cut off by the default. Streams use a finite read timeout too: an
+  event stream that stops sending (the server sends a heartbeat every 10 s) ends with a `MitraError`.
+- **Per call**, any method takes `request_timeout=` (seconds or an `httpx.Timeout`), `max_retries=` and
+  `deadline=`: a limit in seconds on the whole call, every attempt and every pause between them. The
+  deadline also shortens each attempt, so `deadline=5` never runs for longer than 5 s.
+- **Retries** apply to 429 on every call, and to 408, 500, 502, 503, 504 and network failures only on
+  calls that are safe to repeat (`GET`, `PUT`, `DELETE`, or a call with an idempotency key). Other 4xx are
+  never retried. Waits grow as 0.5 s, 1 s, 2 s ... capped at 8 s, each randomised to 50 to 100 percent so
+  clients that failed together do not return together. A `Retry-After` is honoured; if it is longer than
+  60 s the error is raised instead of slept on. All the sleeping of one call together is capped at 60 s.
+- **Uploads** stream a file from disk when you pass a path; they are not read into memory.
+- **Nothing is cached.** The API sends no `ETag` or `Cache-Control`, so there is nothing safe to reuse;
+  every call asks the server. Responses are gzip-compressed on the wire.
+- `pip install mitra-sdk` pulls only `httpx` and `pydantic`; the wheel is about 32 KB.
 
 ## Errors
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -57,6 +58,8 @@ from .models import Gem as GemModel
 
 # Per-call options accepted by every method as keyword arguments:
 #   workspace_id=..., language=..., idempotency_key=...
+#   request_timeout=... (seconds or httpx.Timeout), max_retries=..., deadline=... (seconds, all
+#   attempts and waits of this one call together)
 _Opts = Any
 
 DEFAULT_JOB_TIMEOUT = 1860.0  # a little over the 30 minute maximum for predictions
@@ -66,22 +69,36 @@ def _as_job(payload: Any) -> Job:
     return Job.model_validate(payload)
 
 
+async def _close_after(call: Any, stack: contextlib.ExitStack) -> Any:
+    try:
+        return await call
+    finally:
+        stack.close()
+
+
+@contextlib.contextmanager
 def _file_part(
     file: str | os.PathLike[str] | bytes | BinaryIO,
     filename: str | None,
     content_type: str | None,
-) -> tuple[str, Any, str | None]:
-    """Return an httpx multipart tuple. Paths are read fully so retries can resend them."""
+) -> Iterator[tuple[str, Any, str | None]]:
+    """Yield an httpx multipart tuple. A path or a seekable file is streamed from disk in small
+    chunks (httpx rewinds it for a retry), so a 500 MB upload does not sit in memory; the handle
+    this opens is closed on exit. Bytes and non-seekable streams are used as they are or read once."""
     if isinstance(file, (str, os.PathLike)):
-        with open(file, "rb") as handle:
-            content = handle.read()
         name = filename or os.path.basename(os.fspath(file))
-    elif isinstance(file, bytes):
-        content, name = file, filename or "upload"
+        with open(file, "rb") as handle:
+            yield name, handle, content_type
+        return
+    if isinstance(file, bytes):
+        yield filename or "upload", file, content_type
+        return
+    name = os.path.basename(str(filename or getattr(file, "name", "upload")))
+    seekable = getattr(file, "seekable", None)
+    if callable(seekable) and seekable():
+        yield name, file, content_type
     else:
-        content, name = file.read(), filename or getattr(file, "name", "upload")
-        name = os.path.basename(str(name))
-    return name, content, content_type
+        yield name, file.read(), content_type
 
 
 def _audio_fields(
@@ -115,6 +132,14 @@ def timeout_for(prefer: str | None) -> float:
     if prefer and prefer.startswith("wait="):
         return int(prefer[5:]) + 15.0
     return 0.0
+
+
+def _waiting(
+    settings: _core.Settings, base: float | httpx.Timeout | None, prefer: str | None
+) -> httpx.Timeout:
+    """The timeout of a ``Prefer: wait=N`` request: the caller's or the client's, with the read
+    time raised above N so the server's answer is not cut off by our own timeout."""
+    return _core.with_read(settings.resolve(base), timeout_for(prefer))
 
 
 # (first, longest) seconds between polls of a source or file that is still being read
@@ -327,14 +352,23 @@ class _Files(_Resources):
 
         ``on_duplicate`` is ``"ask"`` (default: an identical file waits for ``files.duplicate``,
         see ``file.decision_required``) or ``"keep_both"``."""
-        part = _file_part(file, filename, content_type)
-        return self._c.settle(
-            "POST", "/files", kind="file", wait=wait, background=background,
-            parse=File.model_validate, is_done=lambda f: f.is_settled,
-            poll=lambda f: (f"/files/{f.id}", File.model_validate, lambda _current, polled: polled),
-            files={"file": part},
-            data={"on_duplicate": on_duplicate} if on_duplicate else None, **opts,
-        )
+        stack = contextlib.ExitStack()
+        part = stack.enter_context(_file_part(file, filename, content_type))
+        try:
+            result = self._c.settle(
+                "POST", "/files", kind="file", wait=wait, background=background,
+                parse=File.model_validate, is_done=lambda f: f.is_settled,
+                poll=lambda f: (f"/files/{f.id}", File.model_validate, lambda _current, polled: polled),
+                files={"file": part},
+                data={"on_duplicate": on_duplicate} if on_duplicate else None, **opts,
+            )
+        except BaseException:
+            stack.close()
+            raise
+        if asyncio.iscoroutine(result):  # AsyncMitra: keep the file open until the await ends
+            return _close_after(result, stack)
+        stack.close()
+        return result
 
     def list(self, **opts: _Opts) -> Any:
         return self._c.request("GET", "/files", parse=FileList.model_validate, **opts)
@@ -699,31 +733,34 @@ class _SyncCore:
         raw: bool = False,
         with_status: bool = False,
         full: bool = False,
-        request_timeout: float | None = None,
+        request_timeout: float | httpx.Timeout | None = None,
+        max_retries: int | None = None,
+        deadline: float | None = None,
         **prep: Any,
     ) -> Any:
         kwargs = _core.prepare(self.settings, method, path, **prep)
-        timeout = request_timeout or self.settings.timeout
-        attempt = 0
+        attempts = _core.Attempts(
+            self.settings, kwargs, timeout=self.settings.resolve(request_timeout),
+            max_retries=max_retries, deadline=deadline,
+        )
         while True:
             response: httpx.Response | None = None
             try:
-                response = self.http.request(**kwargs, timeout=timeout)
+                response = self.http.request(**kwargs, timeout=attempts.timeout())
             except httpx.TransportError as exc:
-                if not _core.should_retry(kwargs, None, attempt, self.settings.max_retries):
+                delay = attempts.next_delay(None)
+                if delay is None:
                     raise MitraError(f"network error: {exc}") from exc
-            if response is not None:
+            else:
                 if response.status_code < 400:
                     if full:
                         return response
                     decoded = _core.decode(response, parse, raw)
                     return (response.status_code, decoded) if with_status else decoded
-                if response.status_code not in _core.RETRY_STATUSES or not _core.should_retry(
-                    kwargs, response.status_code, attempt, self.settings.max_retries
-                ):
+                delay = attempts.next_delay(response)
+                if delay is None:
                     _core.raise_for_response(response)
-            time.sleep(_core.retry_delay(response, attempt))
-            attempt += 1
+            time.sleep(delay)
 
     def long(
         self,
@@ -738,16 +775,17 @@ class _SyncCore:
         """A job-based call: send ``Prefer: wait=N``, then poll ``GET /jobs/{id}`` until it ends."""
         prefer, timeout = _long_plan(kind, wait, background)
         started = time.monotonic()
+        prep["request_timeout"] = _waiting(self.settings, prep.get("request_timeout"), prefer)
         job = self.request(
             method, path, prefer=prefer, parse=_as_job,
-            request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
+            **prep,
         )
         if background:
             return job
         if job.is_terminal:
             return _check_terminal(job)
         left = max(timeout - (time.monotonic() - started), 0.0)
-        return self.jobs.wait(job, left, **_job_opts(prep))
+        return self.jobs.wait_from(job, left, **_job_opts(prep))
 
     def settle(
         self,
@@ -766,9 +804,10 @@ class _SyncCore:
         until ``is_done``. On timeout the resource is returned as it stands (nothing is raised)."""
         prefer, timeout = _long_plan(kind, wait, background)
         started = time.monotonic()
+        prep["request_timeout"] = _waiting(self.settings, prep.get("request_timeout"), prefer)
         result = self.request(
             method, path, prefer=prefer, parse=parse,
-            request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
+            **prep,
         )
         if background or is_done(result):
             return result
@@ -786,25 +825,42 @@ class _SyncCore:
             if is_done(result):
                 return result
 
-    def stream(self, **prep: Any) -> Iterator[StreamEvent]:
+    def stream(
+        self,
+        *,
+        request_timeout: float | httpx.Timeout | None = None,
+        max_retries: int | None = None,  # a stream is never retried: events may have been seen
+        deadline: float | None = None,
+        **prep: Any,
+    ) -> Iterator[StreamEvent]:
+        # The read timeout is the longest silence tolerated between two chunks; the server sends
+        # a heartbeat every 10 s, so a stalled stream ends in ``timeout`` seconds, not never.
+        # ``deadline`` bounds the whole stream.
         kwargs = _core.prepare(self.settings, "POST", "/ask", accept="text/event-stream", **prep)
-        with self.http.stream("POST", **{k: v for k, v in kwargs.items() if k != "method"},
-                              timeout=httpx.Timeout(self.settings.timeout, read=None)) as response:
-            if response.status_code >= 400:
-                response.read()
-                _core.raise_for_response(response)
-            frame: list[str] = []
-            for line in response.iter_lines():
-                if line == "":
-                    parsed = _core.parse_sse(frame)
-                    frame = []
-                    if parsed:
-                        yield StreamEvent(event=parsed[0], data=parsed[1])
-                else:
-                    frame.append(line)
-            parsed = _core.parse_sse(frame)
-            if parsed:
-                yield StreamEvent(event=parsed[0], data=parsed[1])
+        timeout = self.settings.resolve(request_timeout)
+        ends = None if deadline is None else time.monotonic() + deadline
+        try:
+            with self.http.stream("POST", **{k: v for k, v in kwargs.items() if k != "method"},
+                                  timeout=timeout) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    _core.raise_for_response(response)
+                frame: list[str] = []
+                for line in response.iter_lines():
+                    if ends is not None and time.monotonic() > ends:
+                        raise MitraError(f"deadline of {deadline}s exceeded")
+                    if line == "":
+                        parsed = _core.parse_sse(frame)
+                        frame = []
+                        if parsed:
+                            yield StreamEvent(event=parsed[0], data=parsed[1])
+                    else:
+                        frame.append(line)
+                parsed = _core.parse_sse(frame)
+                if parsed:
+                    yield StreamEvent(event=parsed[0], data=parsed[1])
+        except httpx.TransportError as exc:
+            raise MitraError(f"network error: {exc}") from exc
 
 
 class _SyncJobs(_JobsBase):
@@ -825,8 +881,27 @@ class _SyncJobs(_JobsBase):
         unless ``raise_on_failure=False``, :class:`JobFailedError` for failed or cancelled jobs.
         """
         job_id = job if isinstance(job, str) else job.id
+        return self.wait_from(
+            self.get(job_id, **opts), timeout, poll_interval=poll_interval,
+            max_poll_interval=max_poll_interval, on_update=on_update,
+            raise_on_failure=raise_on_failure, **opts,
+        )
+
+    def wait_from(
+        self,
+        current: Job,
+        timeout: float,
+        *,
+        poll_interval: float = 1.0,
+        max_poll_interval: float = 15.0,
+        on_update: Callable[[Job], None] | None = None,
+        raise_on_failure: bool = True,
+        **opts: _Opts,
+    ) -> Job:
+        """:meth:`wait` for a job you have just fetched or created: the first poll comes after the
+        first delay instead of straight away (a 202 or a ``get`` already told you its state)."""
+        job_id = current.id
         deadline = time.monotonic() + timeout
-        current = self.get(job_id, **opts)
         delays = _poll_delays(poll_interval, max_poll_interval)
         while not current.is_terminal:
             if on_update:
@@ -864,7 +939,7 @@ class _SyncDashboards(_Dashboards):
             return self._c.download(target)
         if response.headers.get("content-type", "").startswith("image/"):
             return response.content
-        job = self._c.jobs.wait(Job.model_validate(response.json()), timeout, **_job_opts(opts))
+        job = self._c.jobs.wait_from(Job.model_validate(response.json()), timeout, **_job_opts(opts))
         return self._c.download((job.result or {})["image_url"])
 
     def render(
@@ -893,12 +968,28 @@ class Mitra:
             ``/api/v1`` is appended for you.
         workspace_id: Sent as ``X-Matih-Workspace`` (OAuth tokens; API keys are pinned).
         language: Default BCP-47 language such as ``hi-IN``, sent as ``Accept-Language``.
-        timeout: Per-request timeout in seconds.
-        max_retries: Retries for 429, and for 5xx or network errors on safe calls.
-        http_client: Bring your own ``httpx.Client`` (proxies, tests).
+        timeout: Seconds for reading, writing and waiting for a pooled connection (default 60),
+            or an ``httpx.Timeout`` for full control. Calls that send ``Prefer: wait=N`` get a read
+            timeout above N automatically.
+        connect_timeout: Seconds to open a connection (default 10).
+        max_retries: Retries (default 2) for 429, and for 408, 5xx or network errors on safe calls
+            (GET, PUT, DELETE, or a call with an idempotency key).
+        max_connections, max_keepalive_connections, keepalive_expiry: connection pool limits
+            (defaults 100, 20, 30 s).
+        http2: Use HTTP/2 (``pip install "mitra-sdk[http2]"``); one connection then carries many
+            concurrent requests.
+        http_client: Bring your own ``httpx.Client`` (proxies, tests). Pool and timeout settings
+            above then belong to that client, except ``timeout``/``connect_timeout`` which are
+            still sent with every request.
 
-    Every endpoint method also accepts ``workspace_id=`` and ``language=``. ``ask`` and
-    ``predictions.create`` also accept ``idempotency_key=`` (generated for you when omitted).
+    One ``Mitra`` is meant to live as long as your process: it owns a connection pool, so reuse it
+    (and ``close()`` it, or use it as a context manager) instead of building one per request. It
+    is safe to share between threads.
+
+    Every endpoint method also accepts ``workspace_id=`` and ``language=``, and
+    ``request_timeout=``, ``max_retries=`` and ``deadline=`` (seconds for all attempts of that
+    call together). ``ask`` and ``predictions.create`` also accept ``idempotency_key=``
+    (generated for you when omitted).
     """
 
     def __init__(
@@ -909,8 +1000,13 @@ class Mitra:
         base_url: str | None = None,
         workspace_id: str | None = None,
         language: str | None = None,
-        timeout: float = 60.0,
+        timeout: float | httpx.Timeout = _core.DEFAULT_TIMEOUT,
+        connect_timeout: float = _core.DEFAULT_CONNECT_TIMEOUT,
         max_retries: int = 2,
+        max_connections: int = _core.DEFAULT_MAX_CONNECTIONS,
+        max_keepalive_connections: int = _core.DEFAULT_MAX_KEEPALIVE,
+        keepalive_expiry: float = _core.DEFAULT_KEEPALIVE_EXPIRY,
+        http2: bool = False,
         http_client: httpx.Client | None = None,
     ) -> None:
         settings = _core.Settings(
@@ -920,10 +1016,15 @@ class Mitra:
             workspace_id=workspace_id,
             language=language,
             timeout=timeout,
+            connect_timeout=connect_timeout,
             max_retries=max_retries,
         )
         self._owns_http = http_client is None
-        self._http = http_client or httpx.Client()
+        self._http = http_client or httpx.Client(
+            timeout=settings.timeout,
+            limits=_core.make_limits(max_connections, max_keepalive_connections, keepalive_expiry),
+            http2=_core.check_http2(http2),
+        )
         core = _SyncCore(settings, self._http)
         core.download = self._download  # type: ignore[attr-defined]
         self._core = core
@@ -1011,21 +1112,25 @@ class Mitra:
         """Ask by voice note (``POST /ask/audio``). ``answer.heard`` has the transcript and the
         detected language; pass ``language`` to force the response language."""
         data = _audio_fields(conversation_id, source_id, language)
-        return self._core.request(
-            "POST",
-            "/ask/audio",
-            files={"file": _file_part(file, filename, content_type)},
-            data=data,
-            parse=Answer.model_validate,
-            **opts,
-        )
+        with _file_part(file, filename, content_type) as part:
+            return self._core.request(
+                "POST",
+                "/ask/audio",
+                files={"file": part},
+                data=data,
+                parse=Answer.model_validate,
+                **opts,
+            )
 
     def _download(self, url: str) -> bytes:
         """Fetch a signed ``image_url``. No credential is sent."""
-        response = self._http.get(
-            urljoin(self._core.settings.base_url + "/", url), timeout=self._core.settings.timeout,
-            follow_redirects=True,
-        )
+        try:
+            response = self._http.get(
+                urljoin(self._core.settings.base_url + "/", url),
+                timeout=self._core.settings.timeout, follow_redirects=True,
+            )
+        except httpx.TransportError as exc:
+            raise MitraError(f"network error: {exc}") from exc
         _core.raise_for_response(response)
         return response.content
 
@@ -1051,31 +1156,34 @@ class _AsyncCore:
         raw: bool = False,
         with_status: bool = False,
         full: bool = False,
-        request_timeout: float | None = None,
+        request_timeout: float | httpx.Timeout | None = None,
+        max_retries: int | None = None,
+        deadline: float | None = None,
         **prep: Any,
     ) -> Any:
         kwargs = _core.prepare(self.settings, method, path, **prep)
-        timeout = request_timeout or self.settings.timeout
-        attempt = 0
+        attempts = _core.Attempts(
+            self.settings, kwargs, timeout=self.settings.resolve(request_timeout),
+            max_retries=max_retries, deadline=deadline,
+        )
         while True:
             response: httpx.Response | None = None
             try:
-                response = await self.http.request(**kwargs, timeout=timeout)
+                response = await self.http.request(**kwargs, timeout=attempts.timeout())
             except httpx.TransportError as exc:
-                if not _core.should_retry(kwargs, None, attempt, self.settings.max_retries):
+                delay = attempts.next_delay(None)
+                if delay is None:
                     raise MitraError(f"network error: {exc}") from exc
-            if response is not None:
+            else:
                 if response.status_code < 400:
                     if full:
                         return response
                     decoded = _core.decode(response, parse, raw)
                     return (response.status_code, decoded) if with_status else decoded
-                if response.status_code not in _core.RETRY_STATUSES or not _core.should_retry(
-                    kwargs, response.status_code, attempt, self.settings.max_retries
-                ):
+                delay = attempts.next_delay(response)
+                if delay is None:
                     _core.raise_for_response(response)
-            await asyncio.sleep(_core.retry_delay(response, attempt))
-            attempt += 1
+            await asyncio.sleep(delay)
 
     async def long(
         self,
@@ -1090,16 +1198,17 @@ class _AsyncCore:
         """A job-based call: send ``Prefer: wait=N``, then poll ``GET /jobs/{id}`` until it ends."""
         prefer, timeout = _long_plan(kind, wait, background)
         started = time.monotonic()
+        prep["request_timeout"] = _waiting(self.settings, prep.get("request_timeout"), prefer)
         job = await self.request(
             method, path, prefer=prefer, parse=_as_job,
-            request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
+            **prep,
         )
         if background:
             return job
         if job.is_terminal:
             return _check_terminal(job)
         left = max(timeout - (time.monotonic() - started), 0.0)
-        return await self.jobs.wait(job, left, **_job_opts(prep))
+        return await self.jobs.wait_from(job, left, **_job_opts(prep))
 
     async def settle(
         self,
@@ -1117,9 +1226,10 @@ class _AsyncCore:
         """Async version of the sync ``settle``: poll the resource itself until ``is_done``."""
         prefer, timeout = _long_plan(kind, wait, background)
         started = time.monotonic()
+        prep["request_timeout"] = _waiting(self.settings, prep.get("request_timeout"), prefer)
         result = await self.request(
             method, path, prefer=prefer, parse=parse,
-            request_timeout=max(self.settings.timeout, timeout_for(prefer)), **prep,
+            **prep,
         )
         if background or is_done(result):
             return result
@@ -1137,28 +1247,42 @@ class _AsyncCore:
             if is_done(result):
                 return result
 
-    async def stream(self, **prep: Any) -> AsyncIterator[StreamEvent]:
+    async def stream(
+        self,
+        *,
+        request_timeout: float | httpx.Timeout | None = None,
+        max_retries: int | None = None,  # a stream is never retried: events may have been seen
+        deadline: float | None = None,
+        **prep: Any,
+    ) -> AsyncIterator[StreamEvent]:
         kwargs = _core.prepare(self.settings, "POST", "/ask", accept="text/event-stream", **prep)
-        async with self.http.stream(
-            "POST",
-            **{k: v for k, v in kwargs.items() if k != "method"},
-            timeout=httpx.Timeout(self.settings.timeout, read=None),
-        ) as response:
-            if response.status_code >= 400:
-                await response.aread()
-                _core.raise_for_response(response)
-            frame: list[str] = []
-            async for line in response.aiter_lines():
-                if line == "":
-                    parsed = _core.parse_sse(frame)
-                    frame = []
-                    if parsed:
-                        yield StreamEvent(event=parsed[0], data=parsed[1])
-                else:
-                    frame.append(line)
-            parsed = _core.parse_sse(frame)
-            if parsed:
-                yield StreamEvent(event=parsed[0], data=parsed[1])
+        timeout = self.settings.resolve(request_timeout)
+        ends = None if deadline is None else time.monotonic() + deadline
+        try:
+            async with self.http.stream(
+                "POST",
+                **{k: v for k, v in kwargs.items() if k != "method"},
+                timeout=timeout,
+            ) as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    _core.raise_for_response(response)
+                frame: list[str] = []
+                async for line in response.aiter_lines():
+                    if ends is not None and time.monotonic() > ends:
+                        raise MitraError(f"deadline of {deadline}s exceeded")
+                    if line == "":
+                        parsed = _core.parse_sse(frame)
+                        frame = []
+                        if parsed:
+                            yield StreamEvent(event=parsed[0], data=parsed[1])
+                    else:
+                        frame.append(line)
+                parsed = _core.parse_sse(frame)
+                if parsed:
+                    yield StreamEvent(event=parsed[0], data=parsed[1])
+        except httpx.TransportError as exc:
+            raise MitraError(f"network error: {exc}") from exc
 
 
 class _AsyncJobs(_JobsBase):
@@ -1175,8 +1299,26 @@ class _AsyncJobs(_JobsBase):
     ) -> Job:
         """Async version of :meth:`Mitra.jobs.wait`. ``on_update`` may be a plain function."""
         job_id = job if isinstance(job, str) else job.id
+        return await self.wait_from(
+            await self.get(job_id, **opts), timeout, poll_interval=poll_interval,
+            max_poll_interval=max_poll_interval, on_update=on_update,
+            raise_on_failure=raise_on_failure, **opts,
+        )
+
+    async def wait_from(
+        self,
+        current: Job,
+        timeout: float,
+        *,
+        poll_interval: float = 1.0,
+        max_poll_interval: float = 15.0,
+        on_update: Callable[[Job], Any] | None = None,
+        raise_on_failure: bool = True,
+        **opts: _Opts,
+    ) -> Job:
+        """Async :meth:`Mitra.jobs.wait_from`."""
+        job_id = current.id
         deadline = time.monotonic() + timeout
-        current = await self.get(job_id, **opts)
         delays = _poll_delays(poll_interval, max_poll_interval)
         while not current.is_terminal:
             if on_update:
@@ -1209,7 +1351,7 @@ class _AsyncDashboards(_Dashboards):
             return await self._c.download(target)
         if response.headers.get("content-type", "").startswith("image/"):
             return response.content
-        job = await self._c.jobs.wait(
+        job = await self._c.jobs.wait_from(
             Job.model_validate(response.json()), timeout, **_job_opts(opts)
         )
         return await self._c.download((job.result or {})["image_url"])
@@ -1232,7 +1374,9 @@ class _AsyncPredictions(_Predictions):
 class AsyncMitra:
     """Asynchronous client with the same surface as :class:`Mitra`; every call is awaitable.
 
-    ``ask_stream`` is used with ``async for``.
+    ``ask_stream`` is used with ``async for``. Takes the same options as :class:`Mitra`. Build one
+    per process (or per event loop), reuse it, and ``await aclose()`` it or use ``async with``;
+    it is safe to share between tasks.
     """
 
     def __init__(
@@ -1243,8 +1387,13 @@ class AsyncMitra:
         base_url: str | None = None,
         workspace_id: str | None = None,
         language: str | None = None,
-        timeout: float = 60.0,
+        timeout: float | httpx.Timeout = _core.DEFAULT_TIMEOUT,
+        connect_timeout: float = _core.DEFAULT_CONNECT_TIMEOUT,
         max_retries: int = 2,
+        max_connections: int = _core.DEFAULT_MAX_CONNECTIONS,
+        max_keepalive_connections: int = _core.DEFAULT_MAX_KEEPALIVE,
+        keepalive_expiry: float = _core.DEFAULT_KEEPALIVE_EXPIRY,
+        http2: bool = False,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         settings = _core.Settings(
@@ -1254,10 +1403,15 @@ class AsyncMitra:
             workspace_id=workspace_id,
             language=language,
             timeout=timeout,
+            connect_timeout=connect_timeout,
             max_retries=max_retries,
         )
         self._owns_http = http_client is None
-        self._http = http_client or httpx.AsyncClient()
+        self._http = http_client or httpx.AsyncClient(
+            timeout=settings.timeout,
+            limits=_core.make_limits(max_connections, max_keepalive_connections, keepalive_expiry),
+            http2=_core.check_http2(http2),
+        )
         core = _AsyncCore(settings, self._http)
         core.download = self._download  # type: ignore[attr-defined]
         self._core = core
@@ -1338,20 +1492,24 @@ class AsyncMitra:
         **opts: _Opts,
     ) -> Answer:
         data = _audio_fields(conversation_id, source_id, language)
-        return await self._core.request(
-            "POST",
-            "/ask/audio",
-            files={"file": _file_part(file, filename, content_type)},
-            data=data,
-            parse=Answer.model_validate,
-            **opts,
-        )
+        with _file_part(file, filename, content_type) as part:
+            return await self._core.request(
+                "POST",
+                "/ask/audio",
+                files={"file": part},
+                data=data,
+                parse=Answer.model_validate,
+                **opts,
+            )
 
     async def _download(self, url: str) -> bytes:
-        response = await self._http.get(
-            urljoin(self._core.settings.base_url + "/", url), timeout=self._core.settings.timeout,
-            follow_redirects=True,
-        )
+        try:
+            response = await self._http.get(
+                urljoin(self._core.settings.base_url + "/", url),
+                timeout=self._core.settings.timeout, follow_redirects=True,
+            )
+        except httpx.TransportError as exc:
+            raise MitraError(f"network error: {exc}") from exc
         _core.raise_for_response(response)
         return response.content
 

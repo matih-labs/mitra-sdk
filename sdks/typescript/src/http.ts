@@ -39,8 +39,13 @@ export interface SendOptions {
   mapError?: (status: number, headers: Headers, text: string) => MitraError | undefined;
 }
 
+/** A `Retry-After` above this is not slept inside a call: the error is thrown and the caller decides. */
 const MAX_RETRY_AFTER_SEC = 60;
 const MAX_BACKOFF_MS = 8000;
+/** All the sleeping one call does between attempts, together. */
+const RETRY_BUDGET_MS = 60_000;
+/** 429 is retried for every call (the server did not process it); these only for safe calls. */
+const RETRYABLE_WHEN_SAFE = new Set([408, 500, 502, 503, 504]);
 
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -170,26 +175,43 @@ export class HttpClient {
     const init: RequestInit = { method, headers, body };
     if (o.redirect) init.redirect = o.redirect;
 
+    // `deadlineMs` bounds this whole call: every attempt and every sleep between them.
+    const deadlineAt = opts.deadlineMs === undefined ? undefined : Date.now() + opts.deadlineMs;
+    let slept = 0;
+    // Sleep before the next attempt unless that would pass the retry budget or the deadline.
+    const pause = async (delayMs: number): Promise<boolean> => {
+      if (slept + delayMs > RETRY_BUDGET_MS) return false;
+      if (deadlineAt !== undefined && Date.now() + delayMs >= deadlineAt) return false;
+      slept += delayMs;
+      await sleep(delayMs, opts.signal);
+      return true;
+    };
+
     for (let attempt = 0; ; attempt++) {
+      let attemptMs = timeoutMs;
+      if (deadlineAt !== undefined) {
+        const left = deadlineAt - Date.now();
+        if (left <= 0) {
+          throw new ConnectionError(`Deadline of ${opts.deadlineMs} ms exceeded`, { category: "timeout" });
+        }
+        attemptMs = Math.min(timeoutMs, left);
+      }
       let res: Response;
       try {
-        res = await this.once(url, init, o.stream === true, opts.signal, timeoutMs);
+        res = await this.once(url, init, o.stream === true, opts.signal, attemptMs);
       } catch (err) {
-        if (err instanceof ConnectionError && safe && attempt < maxRetries) {
-          await sleep(this.backoff(attempt), opts.signal);
+        if (err instanceof ConnectionError && safe && attempt < maxRetries && (await pause(this.backoff(attempt)))) {
           continue;
         }
         throw err;
       }
 
-      const retryable = res.status === 429 || (res.status >= 500 && safe);
+      const retryable = res.status === 429 || (safe && RETRYABLE_WHEN_SAFE.has(res.status));
       if (retryable && attempt < maxRetries) {
         const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
-        const tooLong = res.status === 429 && retryAfter !== undefined && retryAfter > MAX_RETRY_AFTER_SEC;
-        if (!tooLong) {
+        if (retryAfter === undefined || retryAfter <= MAX_RETRY_AFTER_SEC) {
           const delayMs = retryAfter !== undefined ? retryAfter * 1000 : this.backoff(attempt);
-          await sleep(delayMs, opts.signal);
-          continue;
+          if (await pause(delayMs)) continue;
         }
       }
       return res;
@@ -197,8 +219,9 @@ export class HttpClient {
   }
 
   private backoff(attempt: number): number {
-    const raw = this.config.retryBaseDelayMs * 2 ** attempt;
-    return Math.min(MAX_BACKOFF_MS, Math.round(raw * (0.5 + Math.random() * 0.5)));
+    // Cap first, jitter second: a capped delay must still differ between clients that failed together.
+    const capped = Math.min(MAX_BACKOFF_MS, this.config.retryBaseDelayMs * 2 ** attempt);
+    return Math.round(capped * (0.5 + Math.random() * 0.5));
   }
 
   private async once(
