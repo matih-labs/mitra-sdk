@@ -6,11 +6,8 @@ Python client for the Matih public API. Sync (`Mitra`) and async (`AsyncMitra`) 
 [httpx](https://www.python-httpx.org/), pydantic v2 models for the main response shapes, SSE
 streaming, background-job polling and webhook signature verification.
 
-> Pre-release (0.1.0): the package is not on PyPI until `/api/v1` is live for every workspace. Install from a checkout with
-> `pip install -e sdks/python`.
-
 ```bash
-pip install mitra-sdk        # once released
+pip install mitra-sdk
 ```
 
 Python 3.10+. The package imports as `mitra`.
