@@ -4,7 +4,7 @@ All notable changes are listed here. The Python and TypeScript SDKs share one ve
 released together: one tag `vX.Y.Z` publishes `mitra-sdk` to PyPI and `@matihlabs/mitra` and
 `@matihlabs/embed` to npm.
 
-## Unreleased
+## 0.2.0 - 2026-11-02
 
 Viewer identity for embeds. Contract: `docs/EMBEDS.md` section 3.1b in matih-labs/mitra.
 
