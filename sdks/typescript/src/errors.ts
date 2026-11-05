@@ -101,7 +101,7 @@ export class CreditsError extends MitraError {
   }
 }
 
-/** 409: a conflict with the current state: revoking an invitation that is no longer open, answering a file that is not waiting for a decision, or a workspace already at its 20 webhooks. Read `category`, `code` and `message`. From a change call it is a change reply with no category: `HEAVY_CONFIRM`, `CONFLICT`, `NOTHING_TO_UNDO`, `conversation_other_source`, `previous_conversation_id_required`, `IN_PROGRESS` (the first request of this call is still running: wait, then repeat the call) or `idempotency_key_in_progress` (the server waited 60 s on a key still running: wait, then send the same call with the same key). */
+/** 409: a conflict with the current state: revoking an invitation that is no longer open, answering a file that is not waiting for a decision, or a workspace already at its 20 webhooks. Read `category`, `code` and `message`. From a change call it is a change reply with no category: `HEAVY_CONFIRM`, `CONFLICT`, `NOTHING_TO_UNDO`, `conversation_other_source`, `IN_PROGRESS` (the first request of this call is still running: wait, then repeat the call) or `idempotency_key_in_progress` (the server waited 60 s on a key still running: wait, then send the same call with the same key). */
 export class BusyError extends MitraError {
   constructor(message: string, init: MitraErrorInit) {
     super(message, init);

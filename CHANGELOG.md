@@ -43,8 +43,7 @@ in matih-labs/mitra.
   `code`.
 - A refused conversation id raises `MitraError` with `code` `conversation_not_found`, `conversation_expired`,
   `conversation_other_source` or `conversation_too_long`; a reused idempotency key is a 422 with `code` and `category`
-  both `idempotency_key_reused`; a request with neither `text` nor `item` is a 422 `invalid_request` (no `code`). (`previous_conversation_id_required` is only answered to an MCP confirm, cancel or choose
-  without a `pending_id`: these clients always send one, so it does not reach them.)
+  both `idempotency_key_reused`; a request with neither `text` nor `item` is a 422 `invalid_request` (no `code`).
 - A batch over 25 rows is held with 409 `HEAVY_CONFIRM`; repeat it with `confirm=True` and a new key (the SDK's default).
 - npm publishing of `@matihlabs/mitra` and `@matihlabs/embed` is stage-only: each release needs the maintainer's 2FA approval.
 

@@ -91,7 +91,7 @@ class BusyError(MitraError):
     """409: a conflict with the current state: revoking an invitation that is no longer open,
     answering a file that is not waiting for a decision, a workspace already at its 20 webhooks, or, on
     ``client.changes``, ``HEAVY_CONFIRM`` (``pending_id``), ``CONFLICT``,
-    ``NOTHING_TO_UNDO``, ``conversation_other_source``, ``previous_conversation_id_required``,
+    ``NOTHING_TO_UNDO``, ``conversation_other_source``,
     ``IN_PROGRESS`` (the first request of this call is still running: wait, then repeat the call) and
     ``idempotency_key_in_progress`` (the first request with that key is still running: wait, then
     send the same call with the same key). Read ``code``, ``category`` and ``message``."""
