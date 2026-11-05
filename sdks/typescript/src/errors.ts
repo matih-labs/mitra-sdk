@@ -7,6 +7,8 @@ export interface MitraErrorInit {
   code?: string;
   requestId?: string;
   body?: unknown;
+  /** Every other field of the error body, see `MitraError.extra`. */
+  extra?: Record<string, unknown>;
   cause?: unknown;
 }
 
@@ -19,6 +21,12 @@ export class MitraError extends Error {
   readonly requestId: string | undefined;
   /** Parsed JSON error body, or the raw text when it was not JSON. */
   readonly body: unknown;
+  /**
+   * Every other field of the error (`detail` or top-level body): for example the `pending_id`, `choices`,
+   * `rows` and `credits` of a `409 HEAVY_CONFIRM`, or the `conversation_id` of a refused change call.
+   * Empty when there are none.
+   */
+  readonly extra: Record<string, unknown>;
 
   constructor(message: string, init: MitraErrorInit) {
     super(message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -28,6 +36,19 @@ export class MitraError extends Error {
     this.code = init.code;
     this.requestId = init.requestId;
     this.body = init.body;
+    this.extra = init.extra ?? {};
+  }
+
+  /** The held change a refused change call names (`409 HEAVY_CONFIRM`): confirm or cancel it with this. */
+  get pendingId(): string | undefined {
+    const value = this.extra["pending_id"];
+    return typeof value === "string" ? value : undefined;
+  }
+
+  /** The numbered `choices` a refused change call lists, if any. */
+  get choices(): unknown[] {
+    const value = this.extra["choices"];
+    return Array.isArray(value) ? value : [];
   }
 }
 
@@ -205,9 +226,11 @@ export function parseRetryAfter(value: string | null | undefined, nowMs: number 
 }
 
 /**
- * Build the typed error for a non-2xx response. Understands the API's
- * `{"detail": {"category", "message", "code"?}}` envelope and falls back
- * gracefully for string details, validation arrays and non-JSON bodies.
+ * Build the typed error for a non-2xx response. One reader for both shapes the API answers with: the
+ * `{"detail": {"category", "message", "code"?}}` envelope (`detail` may also be a string or a validation
+ * array), and the top-level `{code, message, ...}` body the `/changes` routes answer with (`409
+ * HEAVY_CONFIRM` with its `pending_id`, `410 ALREADY_UNDONE`, ...). Where both are present the envelope
+ * wins. Whatever else the body carries is kept in `extra`. Non-JSON bodies fall back to their text.
  */
 export function errorFromResponse(status: number, headers: Headers, text: string): MitraError {
   let parsed: unknown;
@@ -220,14 +243,17 @@ export function errorFromResponse(status: number, headers: Headers, text: string
   let category = defaultCategory(status);
   let message = text.trim() !== "" && parsed === undefined ? text.trim().slice(0, 300) : `HTTP ${status}`;
   let code: string | undefined;
+  let extra: Record<string, unknown> = {};
 
   if (isRecord(parsed)) {
-    const detail = parsed["detail"];
-    if (isRecord(detail)) {
-      if (typeof detail["category"] === "string") category = detail["category"];
-      if (typeof detail["message"] === "string") message = detail["message"];
-      if (typeof detail["code"] === "string") code = detail["code"];
-    } else if (typeof detail === "string") {
+    const { detail, ...top } = parsed;
+    // The fields are the top-level body with the envelope's own laid over it, so a code beside a string
+    // `detail` is read too.
+    const fields: Record<string, unknown> = isRecord(detail) ? { ...top, ...detail } : top;
+    if (typeof fields["category"] === "string") category = fields["category"];
+    if (typeof fields["code"] === "string") code = fields["code"];
+    if (typeof fields["message"] === "string" && fields["message"] !== "") message = fields["message"];
+    if (typeof detail === "string") {
       message = detail;
     } else if (Array.isArray(detail)) {
       category = "validation";
@@ -239,9 +265,8 @@ export function errorFromResponse(status: number, headers: Headers, text: string
           return loc ? `${loc}: ${msg}` : msg;
         })
         .join("; ");
-    } else if (typeof parsed["message"] === "string") {
-      message = parsed["message"];
     }
+    extra = Object.fromEntries(Object.entries(fields).filter(([key]) => key !== "message" && key !== "category" && key !== "code"));
   }
 
   const init: MitraErrorInit = {
@@ -250,6 +275,7 @@ export function errorFromResponse(status: number, headers: Headers, text: string
     code,
     requestId: headers.get("x-request-id") ?? undefined,
     body: parsed === undefined ? text : parsed,
+    extra,
   };
 
   switch (status) {
@@ -307,18 +333,13 @@ export function sourceErrorFromResponse(status: number, headers: Headers, text: 
 export function embedErrorFromResponse(status: number, headers: Headers, text: string): MitraError | undefined {
   if (status !== 422 && status !== 404) return undefined;
   const base = errorFromResponse(status, headers, text);
-  let code = base.code;
-  // The code is in the envelope's `detail.code`; a top-level `code` is accepted too.
-  if (code === undefined && isRecord(base.body)) {
-    const top = base.body["code"];
-    if (typeof top === "string") code = top;
-  }
   const init: MitraErrorInit = {
     status,
     category: base.category,
-    code,
+    code: base.code,
     requestId: base.requestId,
     body: base.body,
+    extra: base.extra,
   };
   return status === 422 ? new EmbedRefusedError(base.message, init) : new EmbedNotFoundError(base.message, init);
 }

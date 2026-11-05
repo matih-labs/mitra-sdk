@@ -740,10 +740,27 @@ export interface ChangeReply {
   change_id?: string | null;
   batch_id?: string | null;
   pending_id?: string | null;
+  affected?: number;
+  undo_until?: string | null;
   items?: Record<string, unknown>[];
   choices?: Record<string, unknown>[];
+  before?: unknown;
+  after?: unknown;
+  rows?: number | null;
+  credits?: number | string | null;
   undoable?: boolean | null;
   expires_in?: number | null;
+  /** Present only when the server says them: a change queued for a shop computer, a saved row read back, a yes or no that found several things waiting (`open`). */
+  queued_for?: string;
+  retry_after?: number;
+  queue_reason?: string;
+  queue_message?: string;
+  queue_depth?: number;
+  oldest_queued_seconds?: number;
+  queue_window_seconds?: number;
+  record?: Record<string, unknown>;
+  open?: Record<string, unknown>[];
+  asks?: unknown;
   [key: string]: unknown;
 }
 

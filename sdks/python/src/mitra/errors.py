@@ -15,6 +15,9 @@ class MitraError(Exception):
         code: Optional machine-readable code.
         request_id: Value of the ``x-request-id`` response header, quote it in support requests.
         body: The decoded response body, if any.
+        extra: Every other field of the error (``detail`` or top-level body), for example the
+            ``pending_id``, ``choices``, ``rows`` and ``credits`` of a ``409 HEAVY_CONFIRM``, or the
+            ``conversation_id`` of a refused change call. Empty when there are none.
     """
 
     def __init__(
@@ -26,6 +29,7 @@ class MitraError(Exception):
         code: str | None = None,
         request_id: str | None = None,
         body: Any = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -34,6 +38,19 @@ class MitraError(Exception):
         self.code = code
         self.request_id = request_id
         self.body = body
+        self.extra: dict[str, Any] = extra or {}
+
+    @property
+    def pending_id(self) -> str | None:
+        """The held change a refused change call names (``409 HEAVY_CONFIRM``): confirm or cancel it with this."""
+        value = self.extra.get("pending_id")
+        return value if isinstance(value, str) else None
+
+    @property
+    def choices(self) -> list[Any]:
+        """The numbered ``choices`` a refused change call lists, if any."""
+        value = self.extra.get("choices")
+        return value if isinstance(value, list) else []
 
     def __str__(self) -> str:
         parts = [self.message]
@@ -177,23 +194,33 @@ def error_from_response(
     method: str | None = None,
     path: str | None = None,
 ) -> MitraError:
-    """Build the right exception for an error response body."""
+    """Build the right exception for an error response body.
+
+    One reader for both shapes the API answers with: the FastAPI envelope ``{"detail": {category, message,
+    code?}}`` (``detail`` may also be a string or a validation list), and the top-level
+    ``{code, message, ...}`` body the ``/changes`` routes answer with (``409 HEAVY_CONFIRM`` with its
+    ``pending_id``, ``410 ALREADY_UNDONE``, ...). Where both are present the envelope wins. Whatever else
+    the body carries is kept in ``extra``."""
     detail = body.get("detail") if isinstance(body, dict) else None
-    category = code = None
-    if isinstance(detail, dict):
-        message = str(detail.get("message") or f"HTTP {status}")
-        category = detail.get("category")
-        code = detail.get("code")
-    elif isinstance(detail, str):
+    # The fields are the top-level body (a /changes reply) with the envelope's own laid over it, so a code
+    # beside a string ``detail`` is read too.
+    top = {k: v for k, v in body.items() if k != "detail"} if isinstance(body, dict) else {}
+    fields = {**top, **(detail if isinstance(detail, dict) else {})}
+    if isinstance(detail, str):
         message = detail
+    elif isinstance(fields.get("message"), str) and fields["message"]:
+        message = fields["message"]
     else:
         message = f"HTTP {status}"
+    category = fields.get("category")
+    code = fields.get("code")
     kwargs: dict[str, Any] = {
         "status": status,
-        "category": category,
-        "code": code,
+        "category": category if isinstance(category, str) else None,
+        "code": code if isinstance(code, str) else None,
         "request_id": request_id,
         "body": body,
+        "extra": {k: v for k, v in fields.items() if k not in ("message", "category", "code")},
     }
     if (
         status == 422
@@ -202,13 +229,9 @@ def error_from_response(
         and path
         and path.rstrip("/").endswith("/sources")
     ):
-        test_result = detail.get("test") if isinstance(detail, dict) else None
-        return SourceTestFailedError(message, test_result=test_result, **kwargs)
+        return SourceTestFailedError(message, test_result=detail.get("test"), **kwargs)
     if _is_embeds_path(path):
         if status == 422:
-            # The code lives in the envelope's ``detail.code``; a top-level ``code`` is accepted too.
-            if kwargs["code"] is None and isinstance(body, dict) and isinstance(body.get("code"), str):
-                kwargs["code"] = body["code"]
             if kwargs["category"] is None:
                 kwargs["category"] = "validation"
             flat = _validation_message(detail)

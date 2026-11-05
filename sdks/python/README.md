@@ -116,8 +116,8 @@ its own `conversation_id`. To continue from an earlier reply (a yes to the chang
 cancel, a pick from its list), pass that reply's `conversation_id` as `previous_conversation_id`.
 If you need older context, pass the previous id: it can itself have its own previous id, and the
 chain is followed as far back as it goes (only the 10 minute hold and undo windows limit it). Leave it
-out and the call starts fresh; a call that would answer a change that is waiting, with no id named, is
-refused (`previous_conversation_id_required`) rather than guessed.
+out and the call starts fresh (a "yes" sent as `text` with no id starts a new request; it is not matched to a change
+waiting in an earlier one).
 
 ```python
 asked = client.changes.update("set Pen to 5", source_id="s1")       # asks first: asked.pending_id, asked.message
@@ -125,9 +125,29 @@ done = client.changes.confirm(asked.pending_id, previous_conversation_id=asked.c
 client.changes.undo(done.change_id)                                  # within 10 minutes
 ```
 
-A refused id raises `MitraError` with `code` `conversation_not_found` (404), `conversation_expired` (410),
-`conversation_other_source` (409), `conversation_too_long` (422, over 1000 requests in one chain) or
-`previous_conversation_id_required` (409).
+`confirm(pending_id, choice=n)` answers a numbered list with the 1-based number as listed; `choose(pending_id, index)` takes
+the 0-based `index` of a choice from `reply.choices`.
+
+Every write call sends its own `Idempotency-Key` (pass `idempotency_key=` to use yours). The server dedupes `update`,
+`batch`, `confirm`, `choose`, `cancel` and `undo` on that key, so a retry with the same key returns the original reply
+instead of acting twice.
+
+A change the server did not make is not a `ChangeReply`: it answers with a non-2xx status and raises `MitraError`
+(`BusyError` for 409) with the reply's `code` and `message` (`HEAVY_CONFIRM`, `ALREADY_UNDONE`, `UNDO_EXPIRED`,
+`CONFIRM_EXPIRED`, `NO_MATCH`, `NOTHING_TO_UNDO`, ...). Its other fields are on the error: `err.pending_id`, `err.choices`
+and the rest in `err.extra` (`rows`, `credits`, `conversation_id`, ...).
+
+```python
+try:
+    client.changes.batch(rows)                                       # over 25 rows: 409 HEAVY_CONFIRM
+except BusyError as err:
+    if err.code == "HEAVY_CONFIRM":
+        client.changes.confirm(err.pending_id, previous_conversation_id=err.extra["conversation_id"])
+```
+
+A refused conversation id raises `MitraError` with `code` `conversation_not_found` (404), `conversation_expired` (410),
+`conversation_other_source` (409) or `conversation_too_long` (422, over 1000 requests in one chain). The same
+`idempotency_key` with another `previous_conversation_id` is a 422 whose `category` (not `code`) is `idempotency_key_reused`.
 
 ## Members and invitations
 

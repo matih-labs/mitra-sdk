@@ -700,8 +700,16 @@ class _Changes(_Resources):
     the 10 minute hold and undo windows limit it). Leave it out and the call starts fresh. The server
     refuses an id that is not yours or is older than 10 minutes (404 ``conversation_not_found``, 410
     ``conversation_expired``), one on another source (409 ``conversation_other_source``), a chain
-    over 1000 requests (422 ``conversation_too_long``), and the same ``idempotency_key`` with another
-    previous id (422 ``idempotency_key_reused``); each raises ``MitraError`` with its ``code``."""
+    over 1000 requests (422 ``conversation_too_long``) and the same ``Idempotency-Key`` with another
+    previous id (422, ``category`` ``idempotency_key_reused``).
+
+    Every call sends its own ``Idempotency-Key`` unless you pass ``idempotency_key``; a retry (the client's
+    own, or yours with the same key) returns the original reply instead of acting twice.
+
+    A change the server did not make answers with a non-2xx status and a body of ``{code, message, ...}``
+    (409 ``HEAVY_CONFIRM`` with ``pending_id``, 410 ``ALREADY_UNDONE``, 404 ``NO_MATCH``, ...). It raises
+    ``MitraError`` (``BusyError`` for 409) with that ``code`` and ``message``; ``pending_id``, ``choices``
+    and every other field of the body are on the error (``err.pending_id``, ``err.extra``)."""
 
     def update(
         self,
@@ -752,8 +760,8 @@ class _Changes(_Resources):
         **opts: _Opts,
     ) -> Any:
         """``POST /changes/pending/{pending_id}/confirm``: apply the change that waits for a yes
-        (``choice`` answers a numbered list, 1 is the first). Pass the ``conversation_id`` of the reply
-        that asked as ``previous_conversation_id``."""
+        (``choice`` answers a numbered list and is 1-based: 1 is the first). Pass the ``conversation_id``
+        of the reply that asked as ``previous_conversation_id``."""
         return self._c.request(
             "POST", f"/changes/pending/{quote(pending_id, safe='')}/confirm",
             json_body=_change_body({"choice": choice}, previous_conversation_id),
@@ -768,7 +776,8 @@ class _Changes(_Resources):
         previous_conversation_id: str | None = None,
         **opts: _Opts,
     ) -> Any:
-        """``POST /changes/pending/{pending_id}/choose``: pick one of the ``choices`` of a reply."""
+        """``POST /changes/pending/{pending_id}/choose``: pick one of the ``choices`` of a reply by its
+        ``index`` (0-based, the ``index`` key of the choice; unlike ``confirm(choice=...)``, which is 1-based)."""
         return self._c.request(
             "POST", f"/changes/pending/{quote(pending_id, safe='')}/choose",
             json_body=_change_body({"index": index}, previous_conversation_id),

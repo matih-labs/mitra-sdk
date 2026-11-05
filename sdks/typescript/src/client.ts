@@ -915,9 +915,17 @@ class ConversationsApi {
  * the 10 minute hold and undo windows limit it). Leave it out and the call starts fresh. The server
  * refuses an id that is not yours or is older than 10 minutes (404 `conversation_not_found`, 410
  * `conversation_expired`), one on another source (409 `conversation_other_source`), a chain over
- * 1000 requests (422 `conversation_too_long`), a yes with nothing named while a change waits (409
- * `previous_conversation_id_required`), and the same idempotency key with another previous id (422
- * `idempotency_key_reused`); each throws a MitraError with its `code`.
+ * 1000 requests (422 `conversation_too_long`) and the same idempotency key with another previous id
+ * (422, `category` `idempotency_key_reused`).
+ *
+ * Every write call sends its own `Idempotency-Key` unless you pass `idempotencyKey` in the request
+ * options; a retry (the client's own, or yours with the same key) returns the original reply instead
+ * of acting twice.
+ *
+ * A change the server did not make answers with a non-2xx status and a body of `{code, message, ...}`
+ * (409 `HEAVY_CONFIRM` with `pending_id`, 410 `ALREADY_UNDONE`, 404 `NO_MATCH`, ...). It throws a
+ * `MitraError` (`BusyError` for 409) with that `code` and `message`; `pendingId`, `choices` and every
+ * other field of the body are on the error (`err.pendingId`, `err.extra`).
  */
 class ChangesApi {
   constructor(private readonly http: HttpClient) {}
@@ -941,12 +949,12 @@ class ChangesApi {
     return this.post("/changes/batch", { items, source_id: sourceId, confirm: confirm || undefined }, params, opts);
   }
 
-  /** `POST /changes/pending/{id}/confirm`: apply the change that waits for a yes (`choice` answers a numbered list, 1 is the first). */
+  /** `POST /changes/pending/{id}/confirm`: apply the change that waits for a yes (`choice` answers a numbered list and is 1-based: 1 is the first). */
   confirm(pendingId: string, params: ChainParams & { choice?: number } = {}, opts?: RequestOptions): Promise<ChangeReply> {
     return this.post(`/changes/pending/${enc(pendingId)}/confirm`, { choice: params.choice }, params, opts);
   }
 
-  /** `POST /changes/pending/{id}/choose`: pick one of the `choices` of a reply. */
+  /** `POST /changes/pending/{id}/choose`: pick one of the `choices` of a reply by its `index` (0-based, the `index` key of the choice; unlike `confirm`'s `choice`, which is 1-based). */
   choose(pendingId: string, index: number, params: ChainParams = {}, opts?: RequestOptions): Promise<ChangeReply> {
     return this.post(`/changes/pending/${enc(pendingId)}/choose`, { index }, params, opts);
   }

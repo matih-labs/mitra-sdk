@@ -15,8 +15,18 @@ in matih-labs/mitra.
   the `conversation_id` of the earlier reply to continue from. If you need older context, pass the previous id; a previous
   id can itself have its own previous id, and the chain is followed as far back as it goes (the 10 minute hold and undo windows
   limit it). Every reply carries its own `conversation_id`. The SDK does not remember the last id for you.
-- A refused id raises `MitraError` with `code` `conversation_not_found`, `conversation_expired`, `conversation_other_source`,
-  `conversation_too_long` or `previous_conversation_id_required`.
+- `confirm(choice)` is the 1-based number of a listed choice; `choose(index)` is the 0-based `index` of a choice from
+  `reply.choices`.
+- Every write call sends an `Idempotency-Key` (yours, or one per call); the server dedupes `update`, `batch`, `confirm`,
+  `choose`, `cancel` and `undo` on it, so a retry returns the original reply.
+- A change the server did not make (409 `HEAVY_CONFIRM`, 410 `ALREADY_UNDONE`, 404 `NO_MATCH`, ...) answers with a top-level
+  `{code, message, ...}` body. Errors now read it as well as the `{detail: {...}}` envelope (one mapper, both SDKs):
+  `MitraError` has the reply's `code` and `message`, plus `extra` (every other field), `pending_id` / `pendingId` and
+  `choices`. `ChangeReply` types every field of the reply.
+- A refused conversation id raises `MitraError` with `code` `conversation_not_found`, `conversation_expired`,
+  `conversation_other_source` or `conversation_too_long`; a reused idempotency key is a 422 with `category`
+  `idempotency_key_reused`. (`previous_conversation_id_required` is only answered to an MCP confirm, cancel or choose
+  without a `pending_id`: these clients always send one, so it does not reach them.)
 
 ## 0.2.0 - 2026-11-02
 

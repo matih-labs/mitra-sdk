@@ -120,10 +120,28 @@ class ChangeReply(_Model):
     change_id: str | None = None
     batch_id: str | None = None
     pending_id: str | None = None
+    affected: int = 0
+    undo_until: str | None = None
     items: list[dict[str, Any]] = Field(default_factory=list)
     choices: list[dict[str, Any]] = Field(default_factory=list)
+    before: Any = None
+    after: Any = None
+    rows: int | None = None
+    credits: float | str | None = None
     undoable: bool | None = None
     expires_in: int | None = None
+    # Present only when the server says them: a change queued for a shop computer, a saved row read back, a
+    # yes or no that found several things waiting (``open``).
+    queued_for: str | None = None
+    retry_after: int | None = None
+    queue_reason: str | None = None
+    queue_message: str | None = None
+    queue_depth: int | None = None
+    oldest_queued_seconds: int | None = None
+    queue_window_seconds: int | None = None
+    record: dict[str, Any] | None = None
+    open: list[dict[str, Any]] | None = None
+    asks: Any = None
 
 
 class Conversation(_Model):
