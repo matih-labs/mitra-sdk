@@ -131,10 +131,14 @@ the 0-based `index` of a choice from `reply.choices`.
 Every write call sends its own `Idempotency-Key` (pass `idempotency_key=` to use yours). The server dedupes `update`,
 `batch`, `confirm`, `choose`, `cancel`, `undo` and `undo_batch` on that key, so a retry with the same key returns the
 original reply instead of acting twice, and the client's own retries (a 429, a 5xx, a dropped connection, a timeout) keep
-the key. Only a reply the server kept is replayed: after a 5xx (`SOURCE_ERROR`, `SOURCE_UNREACHABLE`), `NO_CREDITS` or
-`MEMBER_CAP` the same key runs again and may answer differently. Use one key for one request, and never share a key
-between `update`/`batch` and the answer calls. `batch_from_file` takes no key (the server has none on that route), so it
-is not retried after a 5xx or a timeout.
+the key. Only a reply the server kept is replayed: after a 5xx (`SOURCE_ERROR`, `SOURCE_UNREACHABLE`), `IN_PROGRESS`,
+`NO_CREDITS` or `MEMBER_CAP` the same key runs again and may answer differently. One key is one request, on every change
+call (`update`, `batch`, `confirm`, `choose`, `cancel`, `undo`, `undo_batch`): the same key on another operation or with
+another request is refused with 422 `idempotency_key_reused`, never run. A retry of the same request with the same key gets
+the first reply. The key is per credential. The SDK sends a new key per call; give your own only to retry that one call.
+This needs the server release that ships with PR #384; an older server did not refuse a key shared between
+`update`/`batch` and the answer calls. `batch_from_file` takes no key (the server has none on that route), so it
+is not retried after a 5xx or a timeout, and a timeout leaves the outcome unknown: check the rows before sending the file again.
 
 If the first request with a key is still running, the server waits up to 60 s and then answers 409
 `idempotency_key_in_progress` (`BusyError`): wait, then send the same call with the same `idempotency_key` again. Change
@@ -157,8 +161,8 @@ A change the server did not make is not a `ChangeReply`: it answers with a non-2
 and the rest in `err.extra` (`rows`, `credits`, `conversation_id`, ...). That body has no `category`, so `err.category`
 is `None` for a change reply: branch on `err.code`. A code this SDK has never heard of is raised as it came.
 
-A batch over 25 rows, and a single `update` that touches many, is held for a yes with 409 `HEAVY_CONFIRM`. Repeat the batch
-with `confirm=True` (the documented path); a held `update` is answered with `confirm(err.pending_id, ...)`:
+A batch over 25 rows, or an `update` that touches many, is held for a yes with 409 `HEAVY_CONFIRM`. Repeat a held batch
+with `confirm=True` and a new key (the SDK's default), or answer the hold with `confirm(err.pending_id, ...)`:
 
 ```python
 try:
@@ -389,8 +393,9 @@ client = Mitra(
 ## Errors
 
 All API errors derive from `MitraError` with `.status`, `.category`, `.code`, `.request_id` and
-`.body`. `.category` is `None` when the body has none (a change reply from `changes.*`, which is told by its `.code`; the
-TypeScript SDK gives `undefined`). Subclasses: `AuthError` (401), `PermissionDeniedError` (403: `scope`, `workspace_role`,
+`.body`. `.category` is the server's error class when the body has one, else `None`; a change reply has none, branch on `.code`
+(the TypeScript SDK follows the same rule and gives `undefined`). A request that got no response is a `MitraError` with
+`.category` `network` or `timeout`. Subclasses: `AuthError` (401), `PermissionDeniedError` (403: `scope`, `workspace_role`,
 `source_access`), `CreditsError` (402: `not_ready`, `member_cap`), `BusyError` (409, a conflict with the current state),
 `RateLimitError` (429, `.retry_after`), `EmbedRefusedError` (422 from `embeds.create`, read `.code`), `EmbedNotFoundError` (404 from `embeds.create` and `embeds.revoke`), `SourceTestFailedError` (422 from `sources.create`, `.test_result`), plus `JobFailedError`, `JobTimeoutError`. 429 is retried
 automatically (honouring `Retry-After`) up to `max_retries` (default 2), as are 5xx and network

@@ -61,20 +61,20 @@ describe("errorFromResponse", () => {
   it("falls back for a string detail", () => {
     const err = errorFromResponse(401, new Headers(), JSON.stringify({ detail: "Not authenticated" }));
     expect(err.message).toBe("Not authenticated");
-    expect(err.category).toBe("auth");
+    expect(err.category).toBeUndefined();
   });
 
   it("summarises a validation error array", () => {
     const body = { detail: [{ loc: ["body", "question"], msg: "Field required" }] };
     const err = errorFromResponse(422, new Headers(), JSON.stringify(body));
-    expect(err.category).toBe("validation");
+    expect(err.category).toBeUndefined();
     expect(err.message).toBe("body.question: Field required");
   });
 
   it("copes with a non-JSON body", () => {
     const err = errorFromResponse(502, new Headers(), "<html>Bad gateway</html>");
     expect(err.status).toBe(502);
-    expect(err.category).toBe("server");
+    expect(err.category).toBeUndefined();
     expect(err.message).toBe("<html>Bad gateway</html>");
     expect(err.body).toBe("<html>Bad gateway</html>");
   });

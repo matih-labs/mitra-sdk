@@ -23,8 +23,12 @@ in matih-labs/mitra.
 - Every write call sends an `Idempotency-Key` (yours, or one per call); the server dedupes `update`, `batch`, `confirm`,
   `choose`, `cancel`, `undo` and `undo_batch` on it, so a retry returns the original reply. The client's own retries (429,
   5xx, a dropped connection, a timeout) keep the key. Only a reply the server kept is replayed: after a 5xx, `IN_PROGRESS`,
-  `NO_CREDITS` or `MEMBER_CAP` the same key runs again. The 422 for a key reused on another request is not guaranteed
-  between `update`/`batch` and the answer calls: never share a key.
+  `NO_CREDITS` or `MEMBER_CAP` the same key runs again. One `Idempotency-Key` is one request, on every change
+  call (`update`, `batch`, `confirm`, `choose`, `cancel`, `undo`, `undo_batch`): the same key on another operation or with
+  another request is refused with 422 `idempotency_key_reused`, never run. A retry of the same request with the same key
+  gets the first reply. The key is per credential. The SDK sends a new key per call; give your own only to retry that one
+  call. Needs the server release that ships with PR #384; an older server did not refuse a key shared between
+  `update`/`batch` and the answer calls.
 - A key whose first request is still running is held by the server for up to 60 s, then answered 409
   `idempotency_key_in_progress` (`BusyError`): send the same call with the same key again. Change calls now allow a read
   of at least 75 s (`request_timeout` / `timeoutMs` you pass is kept as given), so the 409 is seen rather than a timeout.
@@ -36,14 +40,26 @@ in matih-labs/mitra.
   `READ_ONLY_SOURCE`, `KEY_SOURCE_NOT_ALLOWED`), 502 `MitraError` (`SOURCE_ERROR`, `SOURCE_UNREACHABLE`); a code the SDK
   does not know is raised as it came.
 - A change reply has no `category`: `err.category` is `None` in Python and `undefined` in TypeScript, so branch on
-  `code`. TypeScript: `MitraError.category` and `MitraErrorInit.category` are now typed `string | undefined` (a type
-  change only; every other error still has a category).
+  `code`.
 - A refused conversation id raises `MitraError` with `code` `conversation_not_found`, `conversation_expired`,
   `conversation_other_source` or `conversation_too_long`; a reused idempotency key is a 422 with `code` and `category`
   both `idempotency_key_reused`; a request with neither `text` nor `item` is a 422 `invalid_request` (no `code`). (`previous_conversation_id_required` is only answered to an MCP confirm, cancel or choose
   without a `pending_id`: these clients always send one, so it does not reach them.)
-- A batch over 25 rows is held with 409 `HEAVY_CONFIRM`; repeat it with `confirm=True` (the documented path).
+- A batch over 25 rows is held with 409 `HEAVY_CONFIRM`; repeat it with `confirm=True` and a new key (the SDK's default).
 - npm publishing of `@matihlabs/mitra` and `@matihlabs/embed` is stage-only: each release needs the maintainer's 2FA approval.
+
+### Changed
+
+- TypeScript, behaviour and type: `err.category` is now only the `category` string the server sent, else `undefined`.
+  Before, it fell back to a word taken from the status (`auth`, `permission`, `validation`, `not_found`, `conflict`,
+  `rate_limited`, `not_ready`, `server`, `unknown`) when the body had none (proxy HTML, a string `detail`, a validation
+  list, an empty body), and those words were not the server's. The server's envelope always carries a category, so a normal
+  API refusal reads the same; branch on `status` or `code` for the rest. The type is `string | undefined` on
+  `MitraError.category` and `MitraErrorInit.category`. Release this as 0.3.0, not a patch.
+- Python, the same rule: `err.category` is the server's string or `None`. The `validation` it filled in for a 422 from
+  `embeds.create` that had none is gone (the server sends one).
+- Python: a request that got no response raises `MitraError` with `category` `network` or `timeout` (as TypeScript's
+  `ConnectionError` already did), and so does a call that outlasts its `deadline` (`timeout`).
 
 ## 0.2.0 - 2026-11-02
 

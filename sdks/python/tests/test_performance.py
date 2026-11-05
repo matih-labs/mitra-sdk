@@ -342,9 +342,10 @@ def test_network_errors_retry_on_safe_calls_only(make_client, sleeps):
         calls.append(request.method)
         raise httpx.ReadTimeout("slow")
 
-    with pytest.raises(MitraError, match="network error"):
+    with pytest.raises(MitraError, match="network error") as caught:
         make_client(down, max_retries=3).sources.test({"type": "postgres"})
     assert calls == ["POST"]
+    assert caught.value.category == "timeout"  # as TypeScript's ConnectionError
 
 
 # ---------------------------------------------------------------------------- polling

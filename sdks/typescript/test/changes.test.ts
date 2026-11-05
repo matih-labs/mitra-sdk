@@ -227,6 +227,7 @@ describe("changes", () => {
       // The server waits up to 60 s on a key still running before it answers 409; the read must outlast that.
       expect(await attemptTimers((c) => c.update({ text: "a" }), 10_000)).toContain(75_000);
       expect(await attemptTimers((c) => c.undoBatch("bat_1"), 10_000)).toContain(75_000);
+      expect(await attemptTimers((c) => c.batchFromFile(new TextEncoder().encode("a\n1\n"), { filename: "rows.csv" }), 10_000)).toContain(75_000);
       expect(await attemptTimers((c) => c.get("chg_1"), 10_000)).not.toContain(75_000);
     });
 
@@ -361,14 +362,13 @@ describe("changes", () => {
       expect([err.status, err.code, err.category, err.message]).toEqual([status, detail["code"], detail["category"], detail["message"]]);
     });
 
-    it("a reused idempotency key carries the same word as code and category", async () => {
+    it("a key reused on another operation is refused with the same word as code and category", async () => {
       const [status, body] = IDEMPOTENCY_KEY_REUSED;
-      const err = await caught(
-        makeClient(sequence(jsonResponse(body, status)).fetch).changes.update(
-          { text: "set Pen to 5", previousConversationId: "c_x" },
-          { idempotencyKey: "k1" },
-        ),
-      );
+      const m = sequence(answer(WRITE_OK), jsonResponse(body, status));
+      const client = makeClient(m.fetch);
+      await client.changes.update({ text: "set Pen to 5" }, { idempotencyKey: "k1" });
+      const err = await caught(client.changes.confirm("pend_1", {}, { idempotencyKey: "k1" }));
+      expect(m.calls.map((c) => c.headers.get("idempotency-key"))).toEqual(["k1", "k1"]);
       expect([err.status, err.category, err.code]).toEqual([422, "idempotency_key_reused", "idempotency_key_reused"]);
     });
 

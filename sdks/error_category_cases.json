@@ -1,0 +1,65 @@
+{
+  "about": "What err.category is for an error response, one table for both SDKs (tests/test_error_category.py and test/error_category.test.ts read it). The rule: the `category` string the server sent in the body, else null. Never derived from the status or the shape of the body. `body` is the raw response text.",
+  "cases": [
+    {
+      "name": "the envelope's category is kept",
+      "status": 403,
+      "body": "{\"detail\":{\"category\":\"scope\",\"message\":\"x\"}}",
+      "category": "scope"
+    },
+    {
+      "name": "an envelope with no category has none",
+      "status": 404,
+      "body": "{\"detail\":{\"message\":\"x\"}}",
+      "category": null
+    },
+    {
+      "name": "a string detail has none",
+      "status": 401,
+      "body": "{\"detail\":\"Not authenticated\"}",
+      "category": null
+    },
+    {
+      "name": "a validation list has none",
+      "status": 422,
+      "body": "{\"detail\":[{\"loc\":[\"body\",\"q\"],\"msg\":\"Field required\"}]}",
+      "category": null
+    },
+    {
+      "name": "a change reply with a code has none",
+      "status": 409,
+      "body": "{\"code\":\"HEAVY_CONFIRM\",\"message\":\"m\"}",
+      "category": null
+    },
+    {
+      "name": "a top-level category is kept",
+      "status": 409,
+      "body": "{\"code\":\"X\",\"category\":\"c\",\"message\":\"m\"}",
+      "category": "c"
+    },
+    {
+      "name": "a status the SDK has never heard of keeps the server's word",
+      "status": 418,
+      "body": "{\"detail\":{\"category\":\"teapot\",\"message\":\"m\"}}",
+      "category": "teapot"
+    },
+    {
+      "name": "the server's own word is not replaced by the status",
+      "status": 401,
+      "body": "{\"detail\":{\"category\":\"authentication\",\"message\":\"m\"}}",
+      "category": "authentication"
+    },
+    {
+      "name": "an HTML body has none",
+      "status": 502,
+      "body": "<html>Bad gateway</html>",
+      "category": null
+    },
+    {
+      "name": "an empty body has none",
+      "status": 404,
+      "body": "",
+      "category": null
+    }
+  ]
+}

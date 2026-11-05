@@ -929,10 +929,14 @@ const CHANGE_READ_MS = 75_000;
  * Every call that acts sends its own Idempotency-Key unless you pass `idempotencyKey`; a retry (the client's
  * own, or yours with the same key) returns the original reply instead of acting twice. Only a reply the
  * server kept is replayed: after a 5xx (`SOURCE_ERROR`, `SOURCE_UNREACHABLE`), `IN_PROGRESS`, `NO_CREDITS` or
- * `MEMBER_CAP` the same key does the work again and may answer differently. Use one key for one request: the
- * 422 for a key reused on another request is not guaranteed between `update`/`batch` and the answer calls
- * (confirm, cancel, choose, undo, undoBatch), so never share a key across them. `batchFromFile` is the
- * exception: the server takes no key on that route, so it is never retried after a 5xx or a timeout. If the
+ * `MEMBER_CAP` the same key does the work again and may answer differently. One key is one request, on every
+ * change call (`update`, `batch`, `confirm`, `choose`, `cancel`, `undo`, `undoBatch`): the same key on another
+ * operation or with another request is refused with 422 `idempotency_key_reused`, never run. A retry of the same
+ * request with the same key gets the first reply. The key is per credential. The SDK sends a new key per call;
+ * give your own only to retry that one call. This needs the server release that ships with PR #384; an older
+ * server did not refuse a key shared between `update`/`batch` and the answer calls. `batchFromFile` is the
+ * exception: the server takes no key on that route, so it is never retried after a 5xx or a timeout, and a
+ * timeout leaves the outcome unknown (check the rows before re-sending). If the
  * first request with a key is still running, the server waits up to 60 s and then answers 409
  * `idempotency_key_in_progress` (`BusyError`): wait, then send the same call with the same `idempotencyKey`
  * again. These calls allow a read of at least 75 s, so the 409 is seen rather than a
@@ -951,14 +955,18 @@ class ChangesApi {
     const json: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) if (value !== undefined) json[key] = value;
     if (chain?.previousConversationId) json["previous_conversation_id"] = chain.previousConversationId;
-    const timeoutMs = opts?.timeoutMs ?? Math.max(this.http.config.timeoutMs, CHANGE_READ_MS);
     return this.http.json<ChangeReply>({
       method: "POST",
       path,
       json,
       autoIdempotency: true,
-      request: { ...opts, timeoutMs },
+      request: this.patient(opts),
     });
+  }
+
+  /** `opts` with a timeout that outlasts the server's 60 s wait on a busy key, unless the caller set one. */
+  private patient(opts?: RequestOptions): RequestOptions {
+    return { ...opts, timeoutMs: opts?.timeoutMs ?? Math.max(this.http.config.timeoutMs, CHANGE_READ_MS) };
   }
 
   /** `POST /changes`: change data from `text` (or one structured `item`). */
@@ -977,8 +985,9 @@ class ChangesApi {
    * `POST /changes/batch/file`: a CSV or `.xlsx` (2 MB at most, a header row, then one change per row) sent as a
    * multipart upload; the reply is the same as `batch`. The server takes no Idempotency-Key on this route, so
    * none is sent (an `idempotencyKey` in `opts` is dropped) and a failed call is not retried after a 5xx or a
-   * timeout (that could change the rows twice). The type is taken from the file name's extension: pass
-   * `filename` for bytes.
+   * timeout (that could change the rows twice), and a timeout leaves the outcome unknown: check the rows before
+   * sending the file again. It allows a read of at least 75 s, like `batch`. The type is taken from the file
+   * name's extension: pass `filename` for bytes.
    */
   batchFromFile(file: BinaryInput, params: BatchFileParams = {}, opts?: RequestOptions): Promise<ChangeReply> {
     const form = new FormData();
@@ -990,7 +999,7 @@ class ChangesApi {
       method: "POST",
       path: "/changes/batch/file",
       form,
-      request: { ...opts, idempotencyKey: undefined },
+      request: { ...this.patient(opts), idempotencyKey: undefined },
     });
   }
 

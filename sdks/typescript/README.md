@@ -189,9 +189,13 @@ Every write call sends its own `Idempotency-Key` (pass `{ idempotencyKey }` as t
 dedupes `update`, `batch`, `confirm`, `choose`, `cancel`, `undo` and `undoBatch` on that key, so a retry with the same key
 returns the original reply instead of acting twice, and the client's own retries (a 429, a 5xx, a dropped connection, a
 timeout) keep the key. Only a reply the server kept is replayed: after a 5xx (`SOURCE_ERROR`, `SOURCE_UNREACHABLE`),
-`NO_CREDITS` or `MEMBER_CAP` the same key runs again and may answer differently. Use one key for one request, and never
-share a key between `update`/`batch` and the answer calls. `batchFromFile` takes no key (the server has none on that
-route), so it is not retried after a 5xx or a timeout.
+`IN_PROGRESS`, `NO_CREDITS` or `MEMBER_CAP` the same key runs again and may answer differently. One key is one request, on
+every change call (`update`, `batch`, `confirm`, `choose`, `cancel`, `undo`, `undoBatch`): the same key on another operation
+or with another request is refused with 422 `idempotency_key_reused`, never run. A retry of the same request with the same
+key gets the first reply. The key is per credential. The SDK sends a new key per call; give your own only to retry that one
+call. This needs the server release that ships with PR #384; an older server did not refuse a key shared between
+`update`/`batch` and the answer calls. `batchFromFile` takes no key (the server has none on that route), so it is not
+retried after a 5xx or a timeout, and a timeout leaves the outcome unknown: check the rows before sending the file again.
 
 If the first request with a key is still running, the server waits up to 60 s and then answers 409
 `idempotency_key_in_progress` (`BusyError`): wait, then send the same call with the same `idempotencyKey` again. Change
@@ -214,8 +218,8 @@ A change the server did not make is not a `ChangeReply`: it answers with a non-2
 and the rest in `err.extra` (`rows`, `credits`, `conversation_id`, ...). That body has no `category`, so `err.category` is
 `undefined` for a change reply: branch on `err.code`. A code this SDK has never heard of is thrown as it came.
 
-A batch over 25 rows, and a single `update` that touches many, is held for a yes with 409 `HEAVY_CONFIRM`. Repeat the batch
-with `confirm: true` (the documented path); a held `update` is answered with `confirm(err.pendingId!, ...)`:
+A batch over 25 rows, or an `update` that touches many, is held for a yes with 409 `HEAVY_CONFIRM`. Repeat a held batch
+with `confirm: true` and a new key (the SDK's default), or answer the hold with `confirm(err.pendingId!, ...)`:
 
 ```ts
 try {
@@ -399,8 +403,9 @@ const client = new Mitra({
 ## Errors
 
 Every API failure is a `MitraError` with `status`, `category`, `code`, `message`, `requestId` (from `x-request-id`) and `body`.
-`category` is `undefined` when the body has none (a change reply from `changes.*`, which is told by its `code`; the Python
-SDK gives `None`).
+`category` is the server's error class when the body has one, else `undefined`; a change reply has none, branch on `code`
+(the Python SDK follows the same rule and gives `None`). It is never derived from the status. A `ConnectionError` sets its own
+(`network` or `timeout`).
 
 | Class | When |
 | --- | --- |

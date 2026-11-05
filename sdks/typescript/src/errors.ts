@@ -3,7 +3,7 @@ import type { Job } from "./types.js";
 export interface MitraErrorInit {
   /** HTTP status, or 0 when the error did not come from an HTTP response. */
   status: number;
-  /** Undefined when the body carries none (a change reply). */
+  /** The server's `category`, or undefined when the error has none. */
   category?: string | undefined;
   code?: string;
   requestId?: string;
@@ -17,10 +17,12 @@ export interface MitraErrorInit {
 export class MitraError extends Error {
   readonly status: number;
   /**
-   * The server's error class (`not_found`, `gone`, `invalid_request`, `idempotency_key_reused`, ...) for a
-   * refusal in the `{"detail": {category, ...}}` envelope. Undefined for a change reply (the top-level
-   * `{code, message, ...}` body of `/changes`), which has no category: branch on `code` there. Python's
-   * `err.category` is `None` in the same case.
+   * The `category` string the server sent (`not_found`, `gone`, `invalid_request`, `idempotency_key_reused`, ...),
+   * else undefined. The SDK never derives one from the status or the shape of the body, so a change reply
+   * (the top-level `{code, message, ...}` body of `/changes`), a string or list `detail` and a body that is not
+   * JSON have none: branch on `code` or `status`. Python's `err.category` follows the same rule. The errors
+   * the SDK raises itself with no response (`ConnectionError`, `JobTimeoutError`, `JobFailedError`) set their own
+   * (`network`, `timeout`, the job's), as does the Python SDK's `MitraError` for a transport failure.
    */
   readonly category: string | undefined;
   /**
@@ -99,7 +101,7 @@ export class CreditsError extends MitraError {
   }
 }
 
-/** 409: a conflict with the current state: revoking an invitation that is no longer open, answering a file that is not waiting for a decision, or a workspace already at its 20 webhooks. Read `category`, `code` and `message`. From a change call it is a change reply with no category: `HEAVY_CONFIRM`, `CONFLICT`, `NOTHING_TO_UNDO`, `conversation_other_source`, `previous_conversation_id_required`, or `idempotency_key_in_progress` (the server waited 60 s on a key still running: wait, then send the same call with the same key). */
+/** 409: a conflict with the current state: revoking an invitation that is no longer open, answering a file that is not waiting for a decision, or a workspace already at its 20 webhooks. Read `category`, `code` and `message`. From a change call it is a change reply with no category: `HEAVY_CONFIRM`, `CONFLICT`, `NOTHING_TO_UNDO`, `conversation_other_source`, `previous_conversation_id_required`, `IN_PROGRESS` (the first request of this call is still running: wait, then repeat the call) or `idempotency_key_in_progress` (the server waited 60 s on a key still running: wait, then send the same call with the same key). */
 export class BusyError extends MitraError {
   constructor(message: string, init: MitraErrorInit) {
     super(message, init);
@@ -204,28 +206,6 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function defaultCategory(status: number): string {
-  switch (status) {
-    case 400:
-    case 422:
-      return "validation";
-    case 401:
-      return "auth";
-    case 402:
-      return "not_ready";
-    case 403:
-      return "permission";
-    case 404:
-      return "not_found";
-    case 409:
-      return "conflict";
-    case 429:
-      return "rate_limited";
-    default:
-      return status >= 500 ? "server" : "unknown";
-  }
-}
-
 /** Parse a Retry-After header (delta-seconds or HTTP date) into seconds. */
 export function parseRetryAfter(value: string | null | undefined, nowMs: number = Date.now()): number | undefined {
   if (value === null || value === undefined) return undefined;
@@ -252,7 +232,7 @@ export function errorFromResponse(status: number, headers: Headers, text: string
     parsed = undefined;
   }
 
-  let category: string | undefined = defaultCategory(status);
+  let category: string | undefined;
   let message = text.trim() !== "" && parsed === undefined ? text.trim().slice(0, 300) : `HTTP ${status}`;
   let code: string | undefined;
   let extra: Record<string, unknown> = {};
@@ -264,14 +244,10 @@ export function errorFromResponse(status: number, headers: Headers, text: string
     const fields: Record<string, unknown> = isRecord(detail) ? { ...top, ...detail } : top;
     if (typeof fields["category"] === "string") category = fields["category"];
     if (typeof fields["code"] === "string") code = fields["code"];
-    // A change reply (a top-level `{code, message, ...}` body, no `detail`) has no category. Python reads it
-    // as None, so the status default must not invent one here.
-    if (detail === undefined && code !== undefined && typeof fields["category"] !== "string") category = undefined;
     if (typeof fields["message"] === "string" && fields["message"] !== "") message = fields["message"];
     if (typeof detail === "string") {
       message = detail;
     } else if (Array.isArray(detail)) {
-      category = "validation";
       message = detail
         .map((item) => {
           if (!isRecord(item)) return String(item);

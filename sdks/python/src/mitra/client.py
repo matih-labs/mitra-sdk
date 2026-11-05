@@ -102,6 +102,27 @@ def _file_part(
         yield name, file.read(), content_type
 
 
+def _with_file_part(
+    file: str | os.PathLike[str] | bytes | BinaryIO,
+    filename: str | None,
+    content_type: str | None,
+    send: Callable[[tuple[str, Any, str | None]], Any],
+) -> Any:
+    """``send(part)`` with the file open as a multipart part. The file stays open until the call is over: for
+    ``AsyncMitra`` ``send`` returns a coroutine, and the file is closed when that is awaited, not before."""
+    stack = contextlib.ExitStack()
+    part = stack.enter_context(_file_part(file, filename, content_type))
+    try:
+        result = send(part)
+    except BaseException:
+        stack.close()
+        raise
+    if asyncio.iscoroutine(result):
+        return _close_after(result, stack)
+    stack.close()
+    return result
+
+
 def _audio_fields(
     conversation_id: str | None, source_id: str | None, language: str | None
 ) -> dict[str, str]:
@@ -353,23 +374,13 @@ class _Files(_Resources):
 
         ``on_duplicate`` is ``"ask"`` (default: an identical file waits for ``files.duplicate``,
         see ``file.decision_required``) or ``"keep_both"``."""
-        stack = contextlib.ExitStack()
-        part = stack.enter_context(_file_part(file, filename, content_type))
-        try:
-            result = self._c.settle(
-                "POST", "/files", kind="file", wait=wait, background=background,
-                parse=File.model_validate, is_done=lambda f: f.is_settled,
-                poll=lambda f: (f"/files/{f.id}", File.model_validate, lambda _current, polled: polled),
-                files={"file": part},
-                data={"on_duplicate": on_duplicate} if on_duplicate else None, **opts,
-            )
-        except BaseException:
-            stack.close()
-            raise
-        if asyncio.iscoroutine(result):  # AsyncMitra: keep the file open until the await ends
-            return _close_after(result, stack)
-        stack.close()
-        return result
+        return _with_file_part(file, filename, content_type, lambda part: self._c.settle(
+            "POST", "/files", kind="file", wait=wait, background=background,
+            parse=File.model_validate, is_done=lambda f: f.is_settled,
+            poll=lambda f: (f"/files/{f.id}", File.model_validate, lambda _current, polled: polled),
+            files={"file": part},
+            data={"on_duplicate": on_duplicate} if on_duplicate else None, **opts,
+        ))
 
     def list(self, **opts: _Opts) -> Any:
         return self._c.request("GET", "/files", parse=FileList.model_validate, **opts)
@@ -713,11 +724,15 @@ class _Changes(_Resources):
     (the client's own, or yours with the same key) returns the original reply instead of acting twice.
     Only a reply the server kept is replayed: after a 5xx (``SOURCE_ERROR``, ``SOURCE_UNREACHABLE``),
     ``IN_PROGRESS``, ``NO_CREDITS`` or ``MEMBER_CAP`` the same key does the work again and may answer
-    differently. Use one key for one request: the 422 for a key reused on another request is not
-    guaranteed between ``update``/``batch`` and the answer calls (confirm, cancel, choose, undo,
-    ``undo_batch``), so never share a key across them.
+    differently. One key is one request, on every change call (``update``, ``batch``, ``confirm``,
+    ``choose``, ``cancel``, ``undo``, ``undo_batch``): the same key on another operation or with another request
+    is refused with 422 ``idempotency_key_reused``, never run. A retry of the same request with the same key gets
+    the first reply. The key is per credential. The SDK sends a new key per call; give your own only to retry that
+    one call. This needs the server release that ships with PR #384; an older server did not refuse a key shared
+    between ``update``/``batch`` and the answer calls.
     ``batch_from_file`` is the exception: the server takes no key on that route, so it is never
-    retried after a 5xx or a timeout. If the first request with a key is still running, the server
+    retried after a 5xx or a timeout, and a timeout leaves the outcome unknown (check the rows before
+    re-sending). If the first request with a key is still running, the server
     waits up to 60 s and then answers 409 ``idempotency_key_in_progress`` (``BusyError``): wait, then
     send the same call with the same ``idempotency_key`` again. These calls allow a read of at least
     75 s, so the 409 is seen rather than a timeout; a call that does time out is retried with its key.
@@ -847,26 +862,18 @@ class _Changes(_Resources):
         """``POST /changes/batch/file``: a CSV or ``.xlsx`` (2 MB at most, a header row, then one change per
         row) sent as a multipart upload; the reply is the same as ``batch``. The server takes no
         ``Idempotency-Key`` on this route, so none is sent (an ``idempotency_key`` you pass is dropped) and a
-        failed call is not retried after a 5xx or a timeout (that could change the rows twice). The type is
-        taken from the file name's extension: pass ``filename`` for bytes or a stream."""
+        failed call is not retried after a 5xx or a timeout (that could change the rows twice), and a timeout
+        leaves the outcome unknown: check the rows before sending the file again. It allows a read of at least
+        75 s, like ``batch``. The type is taken from the file name's extension: pass ``filename`` for bytes or a
+        stream."""
         fields = {"source_id": source_id, "previous_conversation_id": previous_conversation_id,
                   "confirm": "true" if confirm else None}
         fields = {k: v for k, v in fields.items() if v}
         opts.pop("idempotency_key", None)  # the route takes none; a key would make a failed call retry
-        stack = contextlib.ExitStack()
-        part = stack.enter_context(_file_part(file, filename, content_type))
-        try:
-            result = self._c.request(
-                "POST", "/changes/batch/file", files={"file": part}, data=fields,
-                parse=ChangeReply.model_validate, **opts,
-            )
-        except BaseException:
-            stack.close()
-            raise
-        if asyncio.iscoroutine(result):  # AsyncMitra: keep the file open until the await ends
-            return _close_after(result, stack)
-        stack.close()
-        return result
+        return _with_file_part(file, filename, content_type, lambda part: self._c.request(
+            "POST", "/changes/batch/file", files={"file": part}, data=fields,
+            parse=ChangeReply.model_validate, **self._patient(opts),
+        ))
 
     def undo_batch(self, batch_id: str, **opts: _Opts) -> Any:
         """``POST /changes/batch/{batch_id}/undo``: reverse every change of a batch made in the last 10
@@ -952,7 +959,7 @@ class _SyncCore:
             except httpx.TransportError as exc:
                 delay = attempts.next_delay(None)
                 if delay is None:
-                    raise MitraError(f"network error: {exc}") from exc
+                    raise _core.transport_error(exc) from exc
             else:
                 if response.status_code < 400:
                     if full:
@@ -1050,7 +1057,7 @@ class _SyncCore:
                 frame: list[str] = []
                 for line in response.iter_lines():
                     if ends is not None and time.monotonic() > ends:
-                        raise MitraError(f"deadline of {deadline}s exceeded")
+                        raise MitraError(f"deadline of {deadline}s exceeded", category="timeout")
                     if line == "":
                         parsed = _core.parse_sse(frame)
                         frame = []
@@ -1062,7 +1069,7 @@ class _SyncCore:
                 if parsed:
                     yield StreamEvent(event=parsed[0], data=parsed[1])
         except httpx.TransportError as exc:
-            raise MitraError(f"network error: {exc}") from exc
+            raise _core.transport_error(exc) from exc
 
 
 class _SyncJobs(_JobsBase):
@@ -1333,7 +1340,7 @@ class Mitra:
                 timeout=self._core.settings.timeout, follow_redirects=True,
             )
         except httpx.TransportError as exc:
-            raise MitraError(f"network error: {exc}") from exc
+            raise _core.transport_error(exc) from exc
         _core.raise_for_response(response)
         return response.content
 
@@ -1376,7 +1383,7 @@ class _AsyncCore:
             except httpx.TransportError as exc:
                 delay = attempts.next_delay(None)
                 if delay is None:
-                    raise MitraError(f"network error: {exc}") from exc
+                    raise _core.transport_error(exc) from exc
             else:
                 if response.status_code < 400:
                     if full:
@@ -1473,7 +1480,7 @@ class _AsyncCore:
                 frame: list[str] = []
                 async for line in response.aiter_lines():
                     if ends is not None and time.monotonic() > ends:
-                        raise MitraError(f"deadline of {deadline}s exceeded")
+                        raise MitraError(f"deadline of {deadline}s exceeded", category="timeout")
                     if line == "":
                         parsed = _core.parse_sse(frame)
                         frame = []
@@ -1485,7 +1492,7 @@ class _AsyncCore:
                 if parsed:
                     yield StreamEvent(event=parsed[0], data=parsed[1])
         except httpx.TransportError as exc:
-            raise MitraError(f"network error: {exc}") from exc
+            raise _core.transport_error(exc) from exc
 
 
 class _AsyncJobs(_JobsBase):
@@ -1713,7 +1720,7 @@ class AsyncMitra:
                 timeout=self._core.settings.timeout, follow_redirects=True,
             )
         except httpx.TransportError as exc:
-            raise MitraError(f"network error: {exc}") from exc
+            raise _core.transport_error(exc) from exc
         _core.raise_for_response(response)
         return response.content
 

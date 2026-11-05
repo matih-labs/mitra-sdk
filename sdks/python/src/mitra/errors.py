@@ -11,10 +11,12 @@ class MitraError(Exception):
     Attributes:
         message: Human-readable message from the API.
         status: HTTP status code, when the error came from a response.
-        category: API error category, for example ``scope``, ``not_ready`` or ``rate_limited``.
-            ``None`` when the body carries none: a ``/changes`` reply that was not made (``{code, message, ...}``,
-            for example ``HEAVY_CONFIRM``) has a ``code`` and no category, in this SDK and in the TypeScript one.
-            Branch on ``code`` there.
+        category: The ``category`` string the server sent (``scope``, ``not_ready``, ``rate_limited``, ...),
+            else ``None``. The SDK never derives one from the status or the shape of the body, so a ``/changes``
+            reply (``{code, message, ...}``, for example ``HEAVY_CONFIRM``), a string or list ``detail`` and a
+            body that is not JSON have none: branch on ``code`` or ``status``. The TypeScript SDK follows the same
+            rule. A transport failure with no response (``network error: ...``) sets its own, ``network`` or
+            ``timeout``, as TypeScript's ``ConnectionError`` does.
         code: Optional machine-readable code. For a ``/changes`` call it is the reply's own code
             (``HEAVY_CONFIRM``, ``ALREADY_UNDONE``, ...) or the word of a refusal (``conversation_expired``,
             ``idempotency_key_reused``, ``idempotency_key_in_progress``, ...).
@@ -89,7 +91,8 @@ class BusyError(MitraError):
     """409: a conflict with the current state: revoking an invitation that is no longer open,
     answering a file that is not waiting for a decision, a workspace already at its 20 webhooks, or, on
     ``client.changes``, ``HEAVY_CONFIRM`` (``pending_id``), ``CONFLICT``,
-    ``NOTHING_TO_UNDO``, ``conversation_other_source``, ``previous_conversation_id_required`` and
+    ``NOTHING_TO_UNDO``, ``conversation_other_source``, ``previous_conversation_id_required``,
+    ``IN_PROGRESS`` (the first request of this call is still running: wait, then repeat the call) and
     ``idempotency_key_in_progress`` (the first request with that key is still running: wait, then
     send the same call with the same key). Read ``code``, ``category`` and ``message``."""
 
@@ -243,8 +246,6 @@ def error_from_response(
         return SourceTestFailedError(message, test_result=detail.get("test"), **kwargs)
     if _is_embeds_path(path):
         if status == 422:
-            if kwargs["category"] is None:
-                kwargs["category"] = "validation"
             flat = _validation_message(detail)
             return EmbedRefusedError(flat or message, **kwargs)
         if status == 404:

@@ -202,6 +202,14 @@ def prepare(
     return kwargs
 
 
+def transport_error(exc: httpx.TransportError) -> MitraError:
+    """The error for a request that got no response. It sets its own ``category`` (``timeout`` or ``network``),
+    as TypeScript's ``ConnectionError`` does: the one case where the SDK, not the server, names it."""
+    return MitraError(
+        f"network error: {exc}", category="timeout" if isinstance(exc, httpx.TimeoutException) else "network"
+    )
+
+
 def should_retry(kwargs: dict[str, Any], status: int | None, attempt: int, max_retries: int) -> bool:
     """Retry 429 always (not processed), and the other retryable statuses or network errors when
     the call is safe to repeat."""

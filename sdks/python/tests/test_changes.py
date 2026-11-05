@@ -231,8 +231,9 @@ def test_change_calls_wait_longer_than_the_servers_60_second_hold_on_a_busy_key(
     client = make_client(h, timeout=10).changes
     client.update("a")
     client.undo_batch("bat_1")
+    client.batch_from_file(b"a\n1\n", filename="rows.csv")
     client.get("chg_1")
-    assert [_read_seconds(r) for r in h.seen] == [75.0, 75.0, 10.0]
+    assert [_read_seconds(r) for r in h.seen] == [75.0, 75.0, 75.0, 10.0]
 
 
 def test_a_read_time_given_for_one_change_call_is_kept(make_client):
@@ -378,11 +379,14 @@ def test_the_conversation_refusals_carry_their_code_and_sentence(make_client, an
     assert err.message == body["detail"]["message"]
 
 
-def test_a_reused_idempotency_key_carries_the_same_word_as_code_and_category(make_client):
+def test_a_key_reused_on_another_operation_is_refused_with_the_same_word_as_code_and_category(make_client):
+    h = seq(lambda: json_response(WRITE_OK[1]), lambda: json_response(IDEMPOTENCY_KEY_REUSED[1], 422))
+    client = make_client(h)
+    client.changes.update("set Pen to 5", idempotency_key="k1")
     with pytest.raises(MitraError) as caught:
-        make_client(recorder(IDEMPOTENCY_KEY_REUSED)).changes.update(
-            "set Pen to 5", previous_conversation_id="c_x", idempotency_key="k1")
+        client.changes.confirm("pend_1", idempotency_key="k1")
     err = caught.value
+    assert [c.headers["idempotency-key"] for c in h.calls] == ["k1", "k1"]
     assert (err.status, err.category, err.code) == (422, "idempotency_key_reused", "idempotency_key_reused")
 
 
