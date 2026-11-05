@@ -425,7 +425,7 @@ client.changes.undo(done.change_id)                                   # within 1
 
 `update`, `batch`, `confirm`, `choose` and `cancel` take `previous_conversation_id`: the `conversation_id` of the earlier reply to continue from. If you need older context, pass the previous id. It can itself have its own previous id, and the chain is followed as far back as it goes; only the 10 minute hold and undo windows limit it. Leave it out and the call starts fresh. The SDK does not remember the last id for you.
 
-A refused id raises `MitraError` with `code` `conversation_not_found` (404), `conversation_expired` (410), `conversation_other_source` (409), `conversation_too_long` (422, over 1000 requests in one chain) or `previous_conversation_id_required` (409: a change is waiting and the call named none). `undo(change_id)` and `get(change_id)` take only the change id; their reply's `conversation_id` names the request that made it, or is `None` if it was made in none.
+A refused id raises `MitraError` with `code` `conversation_not_found` (404), `conversation_expired` (410), `conversation_other_source` (409) or `conversation_too_long` (422, over 1000 requests in one chain). `undo(change_id)` and `get(change_id)` take only the change id; their reply's `conversation_id` names the request that made it, or is `None` if it was made in none.
 
 ## Retries and idempotency
 
