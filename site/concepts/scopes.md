@@ -15,6 +15,7 @@ a credential without it gets `403` with category `scope` and nothing runs.
 | `gems:read` | List and read Gems and their images |
 | `gems:generate` | Generate Gems (spends credits) |
 | `ask` | Ask questions (text and audio), conversations |
+| `data:write` | Change data in a source from a sentence, confirm, cancel, undo (the Write permission on the source is also required) |
 | `dashboards:read` | List dashboards and render them as images |
 | `predict` | Run predictions (spends credits) |
 | `webhooks:manage` | Create, list, test and delete webhooks, read deliveries (admin member required) |

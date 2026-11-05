@@ -413,6 +413,20 @@ client.invitations.create("member", phone="+910000000000")
 
 `conversations.list()` and `conversations.get(conversation_id)` return the decoded JSON.
 
+### Changes
+
+Change data in a source from a sentence, and answer what it asks back. Needs `data:write` and the Write permission on the source. Every call is its own request and its reply (a `ChangeReply`) carries its own `conversation_id`.
+
+```python
+asked = client.changes.update("set Pen to 5", source_id="s1")        # asks first: asked.pending_id, asked.message
+done = client.changes.confirm(asked.pending_id, previous_conversation_id=asked.conversation_id)
+client.changes.undo(done.change_id)                                   # within 10 minutes
+```
+
+`update`, `batch`, `confirm`, `choose` and `cancel` take `previous_conversation_id`: the `conversation_id` of the earlier reply to continue from. If you need older context, pass the previous id. It can itself have its own previous id, and the chain is followed as far back as it goes; only the 10 minute hold and undo windows limit it. Leave it out and the call starts fresh. The SDK does not remember the last id for you.
+
+A refused id raises `MitraError` with `code` `conversation_not_found` (404), `conversation_expired` (410), `conversation_other_source` (409), `conversation_too_long` (422, over 1000 requests in one chain) or `previous_conversation_id_required` (409: a change is waiting and the call named none). `undo(change_id)` and `get(change_id)` take only the change id; their reply's `conversation_id` names the request that made it, or is `None` if it was made in none.
+
 ## Retries and idempotency
 
 The client retries for you, up to `max_retries` times (default 2), with the delay taken from `Retry-After` (capped at 60 s) or else exponential backoff (0.5 s, 1 s, 2 s, up to 8 s).

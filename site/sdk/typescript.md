@@ -349,6 +349,20 @@ await mitra.invitations.create({ phone: "+910000000000", role: "member" });
 
 `conversations.list()` returns `{ conversations }`; `conversations.get(id)` returns one conversation.
 
+### Changes
+
+Change data in a source from a sentence, and answer what it asks back. Needs `data:write` and the Write permission on the source. Every call is its own request and its reply (a `ChangeReply`) carries its own `conversation_id`.
+
+```ts
+const asked = await mitra.changes.update({ text: "set Pen to 5", sourceId: "s1" }); // asks first: asked.pending_id
+const done = await mitra.changes.confirm(asked.pending_id!, { previousConversationId: asked.conversation_id! });
+await mitra.changes.undo(done.change_id!); // within 10 minutes
+```
+
+`update`, `batch`, `confirm`, `choose` and `cancel` take `previousConversationId`: the `conversation_id` of the earlier reply to continue from. If you need older context, pass the previous id. It can itself have its own previous id, and the chain is followed as far back as it goes; only the 10 minute hold and undo windows limit it. Leave it out and the call starts fresh. The SDK does not remember the last id for you.
+
+A refused id throws `MitraError` with `code` `conversation_not_found` (404), `conversation_expired` (410), `conversation_other_source` (409), `conversation_too_long` (422, over 1000 requests in one chain) or `previous_conversation_id_required` (409: a change is waiting and the call named none). `undo(changeId)` and `get(changeId)` take only the change id; their reply's `conversation_id` names the request that made it, or is `null` if it was made in none.
+
 ### Endpoints without a method: `raw`
 
 `mitra.raw` is an `openapi-fetch` client with loose typing. It shares the client's credential, headers, retries and timeout, so you can call an endpoint that has no dedicated method yet (see the [API reference](../api-reference.md)):
