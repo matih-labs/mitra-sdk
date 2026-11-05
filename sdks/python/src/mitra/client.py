@@ -16,6 +16,7 @@ from . import _core
 from .errors import JobFailedError, JobTimeoutError, MitraError
 from .models import (
     Answer,
+    ChangeReply,
     ConnectorList,
     Conversation,
     ConversationList,
@@ -689,6 +690,123 @@ class _Conversations(_Resources):
         )
 
 
+class _Changes(_Resources):
+    """Change data in a source from a sentence, and answer what it asks back (``data:write``).
+
+    Every call is its own request and its reply carries its own ``conversation_id``. To continue from an
+    earlier reply (a yes to the change it is holding, an undo of it), pass that reply's
+    ``conversation_id`` as ``previous_conversation_id``. If you need older context, pass the previous
+    id: it can itself have its own previous id, and the chain is followed as far back as it goes (only
+    the 10 minute hold and undo windows limit it). Leave it out and the call starts fresh. The server
+    refuses an id that is not yours or is older than 10 minutes (404 ``conversation_not_found``, 410
+    ``conversation_expired``), one on another source (409 ``conversation_other_source``), a chain
+    over 1000 requests (422 ``conversation_too_long``), and the same ``idempotency_key`` with another
+    previous id (422 ``idempotency_key_reused``); each raises ``MitraError`` with its ``code``."""
+
+    def update(
+        self,
+        text: str | None = None,
+        *,
+        source_id: str | None = None,
+        item: dict[str, Any] | None = None,
+        confirm: bool = False,
+        previous_conversation_id: str | None = None,
+        **opts: _Opts,
+    ) -> Any:
+        """``POST /changes``: change data from ``text`` (or one structured ``item``). A "yes", "no" or
+        "undo that" in ``text`` refers to the change at the end of the chain ``previous_conversation_id``
+        names, and to no other. Returns a :class:`ChangeReply`."""
+        body = _change_body(
+            {"text": text, "source_id": source_id, "item": item, "confirm": confirm or None},
+            previous_conversation_id,
+        )
+        return self._c.request(
+            "POST", "/changes", json_body=body, parse=ChangeReply.model_validate, idempotent=True, **opts
+        )
+
+    def batch(
+        self,
+        items: list[str | dict[str, Any]],
+        *,
+        source_id: str | None = None,
+        confirm: bool = False,
+        previous_conversation_id: str | None = None,
+        **opts: _Opts,
+    ) -> Any:
+        """``POST /changes/batch``: many changes on one source, one result with an entry per item."""
+        body = _change_body(
+            {"items": items, "source_id": source_id, "confirm": confirm or None},
+            previous_conversation_id,
+        )
+        return self._c.request(
+            "POST", "/changes/batch", json_body=body, parse=ChangeReply.model_validate,
+            idempotent=True, **opts,
+        )
+
+    def confirm(
+        self,
+        pending_id: str,
+        *,
+        choice: int | None = None,
+        previous_conversation_id: str | None = None,
+        **opts: _Opts,
+    ) -> Any:
+        """``POST /changes/pending/{pending_id}/confirm``: apply the change that waits for a yes
+        (``choice`` answers a numbered list, 1 is the first). Pass the ``conversation_id`` of the reply
+        that asked as ``previous_conversation_id``."""
+        return self._c.request(
+            "POST", f"/changes/pending/{quote(pending_id, safe='')}/confirm",
+            json_body=_change_body({"choice": choice}, previous_conversation_id),
+            parse=ChangeReply.model_validate, idempotent=True, **opts,
+        )
+
+    def choose(
+        self,
+        pending_id: str,
+        index: int,
+        *,
+        previous_conversation_id: str | None = None,
+        **opts: _Opts,
+    ) -> Any:
+        """``POST /changes/pending/{pending_id}/choose``: pick one of the ``choices`` of a reply."""
+        return self._c.request(
+            "POST", f"/changes/pending/{quote(pending_id, safe='')}/choose",
+            json_body=_change_body({"index": index}, previous_conversation_id),
+            parse=ChangeReply.model_validate, idempotent=True, **opts,
+        )
+
+    def cancel(
+        self, pending_id: str, *, previous_conversation_id: str | None = None, **opts: _Opts
+    ) -> Any:
+        """``POST /changes/pending/{pending_id}/cancel``: drop the change that waits for a yes."""
+        return self._c.request(
+            "POST", f"/changes/pending/{quote(pending_id, safe='')}/cancel",
+            json_body=_change_body({}, previous_conversation_id),
+            parse=ChangeReply.model_validate, idempotent=True, **opts,
+        )
+
+    def undo(self, change_id: str, **opts: _Opts) -> Any:
+        """``POST /changes/{change_id}/undo`` (within 10 minutes). The reply's ``conversation_id`` is the
+        one of the request that made the change, to continue from; ``None`` if it was made in none."""
+        return self._c.request(
+            "POST", f"/changes/{quote(change_id, safe='')}/undo",
+            parse=ChangeReply.model_validate, idempotent=True, **opts,
+        )
+
+    def get(self, change_id: str, **opts: _Opts) -> Any:
+        """``GET /changes/{change_id}``; ``conversation_id`` names the request that made it."""
+        return self._c.request(
+            "GET", f"/changes/{quote(change_id, safe='')}", parse=ChangeReply.model_validate, **opts
+        )
+
+
+def _change_body(fields: dict[str, Any], previous_conversation_id: str | None) -> dict[str, Any]:
+    body = {k: v for k, v in fields.items() if v is not None}
+    if previous_conversation_id:
+        body["previous_conversation_id"] = previous_conversation_id
+    return body
+
+
 class _JobsBase(_Resources):
     def get(self, job_id: str, **opts: _Opts) -> Any:
         return self._c.request("GET", f"/jobs/{job_id}", parse=_as_job, **opts)
@@ -1038,6 +1156,7 @@ class Mitra:
         self.jobs = _SyncJobs(core)
         self.webhooks = _Webhooks(core)
         self.conversations = _Conversations(core)
+        self.changes = _Changes(core)
         self.members = _Members(core)
         self.invitations = _Invitations(core)
         self.embeds = _Embeds(core)
@@ -1425,6 +1544,7 @@ class AsyncMitra:
         self.jobs = _AsyncJobs(core)
         self.webhooks = _Webhooks(core)
         self.conversations = _Conversations(core)
+        self.changes = _Changes(core)
         self.members = _Members(core)
         self.invitations = _Invitations(core)
         self.embeds = _Embeds(core)

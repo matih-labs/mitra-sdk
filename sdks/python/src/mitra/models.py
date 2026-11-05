@@ -106,6 +106,26 @@ class ConversationMessage(_Model):
     created_at: str | None = None
 
 
+class ChangeReply(_Model):
+    """The reply of every call of ``client.changes`` (a change, its confirm, cancel, pick or undo, a read of one).
+
+    ``conversation_id`` is this request's own id. Pass it as ``previous_conversation_id`` on the next
+    call to continue from this one: ids chain (A, then B, then C), a previous id can itself have its own
+    previous id, and the server follows the chain as far back as it goes. ``None`` on an undo or a read
+    of a change that was made in no request of yours."""
+
+    code: str | None = None
+    message: str | None = None
+    conversation_id: str | None = None
+    change_id: str | None = None
+    batch_id: str | None = None
+    pending_id: str | None = None
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    choices: list[dict[str, Any]] = Field(default_factory=list)
+    undoable: bool | None = None
+    expires_in: int | None = None
+
+
 class Conversation(_Model):
     id: str
     title: str | None = None

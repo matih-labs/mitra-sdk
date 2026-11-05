@@ -12,6 +12,9 @@ import { parseSSE } from "./sse.js";
 import { isTerminalJob } from "./types.js";
 import type {
   Answer,
+  BatchParams,
+  ChainParams,
+  ChangeReply,
   AskOptions,
   AskAudioParams,
   AskParams,
@@ -26,6 +29,7 @@ import type {
   CreateInvitationParams,
   CreateSourceParams,
   CreateWebhookParams,
+  UpdateParams,
   Dashboard,
   DashboardImageResult,
   DashboardList,
@@ -901,6 +905,68 @@ class ConversationsApi {
   }
 }
 
+/**
+ * Change data in a source from a sentence, and answer what it asks back (`data:write`).
+ *
+ * Every call is its own request and its reply carries its own `conversation_id`. To continue from
+ * an earlier reply (a yes to the change it is holding, an undo of it), pass that reply's
+ * `conversation_id` as `previousConversationId`. If you need older context, pass the previous id:
+ * it can itself have its own previous id, and the chain is followed as far back as it goes (only
+ * the 10 minute hold and undo windows limit it). Leave it out and the call starts fresh. The server
+ * refuses an id that is not yours or is older than 10 minutes (404 `conversation_not_found`, 410
+ * `conversation_expired`), one on another source (409 `conversation_other_source`), a chain over
+ * 1000 requests (422 `conversation_too_long`), a yes with nothing named while a change waits (409
+ * `previous_conversation_id_required`), and the same idempotency key with another previous id (422
+ * `idempotency_key_reused`); each throws a MitraError with its `code`.
+ */
+class ChangesApi {
+  constructor(private readonly http: HttpClient) {}
+
+  private post(path: string, fields: Record<string, unknown>, chain: ChainParams | undefined, opts?: RequestOptions) {
+    const json: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(fields)) if (value !== undefined) json[key] = value;
+    if (chain?.previousConversationId) json["previous_conversation_id"] = chain.previousConversationId;
+    return this.http.json<ChangeReply>({ method: "POST", path, json, autoIdempotency: true, request: opts });
+  }
+
+  /** `POST /changes`: change data from `text` (or one structured `item`). */
+  update(params: UpdateParams, opts?: RequestOptions): Promise<ChangeReply> {
+    const { text, sourceId, item, confirm } = params;
+    return this.post("/changes", { text, source_id: sourceId, item, confirm: confirm || undefined }, params, opts);
+  }
+
+  /** `POST /changes/batch`: many changes on one source, one result with an entry per item. */
+  batch(params: BatchParams, opts?: RequestOptions): Promise<ChangeReply> {
+    const { items, sourceId, confirm } = params;
+    return this.post("/changes/batch", { items, source_id: sourceId, confirm: confirm || undefined }, params, opts);
+  }
+
+  /** `POST /changes/pending/{id}/confirm`: apply the change that waits for a yes (`choice` answers a numbered list, 1 is the first). */
+  confirm(pendingId: string, params: ChainParams & { choice?: number } = {}, opts?: RequestOptions): Promise<ChangeReply> {
+    return this.post(`/changes/pending/${enc(pendingId)}/confirm`, { choice: params.choice }, params, opts);
+  }
+
+  /** `POST /changes/pending/{id}/choose`: pick one of the `choices` of a reply. */
+  choose(pendingId: string, index: number, params: ChainParams = {}, opts?: RequestOptions): Promise<ChangeReply> {
+    return this.post(`/changes/pending/${enc(pendingId)}/choose`, { index }, params, opts);
+  }
+
+  /** `POST /changes/pending/{id}/cancel`: drop the change that waits for a yes. */
+  cancel(pendingId: string, params: ChainParams = {}, opts?: RequestOptions): Promise<ChangeReply> {
+    return this.post(`/changes/pending/${enc(pendingId)}/cancel`, {}, params, opts);
+  }
+
+  /** `POST /changes/{id}/undo` (within 10 minutes). `conversation_id` is the one of the request that made the change, to continue from; `null` if it was made in none. */
+  undo(changeId: string, opts?: RequestOptions): Promise<ChangeReply> {
+    return this.post(`/changes/${enc(changeId)}/undo`, {}, undefined, opts);
+  }
+
+  /** `GET /changes/{id}`; `conversation_id` names the request that made it. */
+  get(changeId: string, opts?: RequestOptions): Promise<ChangeReply> {
+    return this.http.json<ChangeReply>({ method: "GET", path: `/changes/${enc(changeId)}`, request: opts });
+  }
+}
+
 export class Mitra {
   readonly workspaces: WorkspacesApi;
   readonly sources: SourcesApi;
@@ -912,6 +978,7 @@ export class Mitra {
   readonly jobs: JobsApi;
   readonly webhooks: WebhooksApi;
   readonly conversations: ConversationsApi;
+  readonly changes: ChangesApi;
   readonly members: MembersApi;
   readonly invitations: InvitationsApi;
   readonly embeds: EmbedsApi;
@@ -961,6 +1028,7 @@ export class Mitra {
     this.predictions = new PredictionsApi(this.http, this.jobs);
     this.webhooks = new WebhooksApi(this.http);
     this.conversations = new ConversationsApi(this.http);
+    this.changes = new ChangesApi(this.http);
     this.members = new MembersApi(this.http);
     this.invitations = new InvitationsApi(this.http);
     this.embeds = new EmbedsApi(this.http);

@@ -4,6 +4,20 @@ All notable changes are listed here. The Python and TypeScript SDKs share one ve
 released together: one tag `vX.Y.Z` publishes `mitra-sdk` to PyPI and `@matihlabs/mitra` and
 `@matihlabs/embed` to npm.
 
+## Unreleased
+
+Changing data from a sentence, and continuing a conversation. Contract: `docs/public-api/endpoints.md` ("Changes")
+in matih-labs/mitra.
+
+- New `changes` resource on both clients (scope `data:write`): `update`, `batch`, `confirm`, `choose`, `cancel`, `undo`, `get`
+  (Python `ChangeReply`; TypeScript `ChangeReply`, `UpdateParams`, `BatchParams`, `ChainParams`).
+- `update`, `batch`, `confirm`, `choose` and `cancel` take `previous_conversation_id` (TypeScript `previousConversationId`):
+  the `conversation_id` of the earlier reply to continue from. If you need older context, pass the previous id; a previous
+  id can itself have its own previous id, and the chain is followed as far back as it goes (the 10 minute hold and undo windows
+  limit it). Every reply carries its own `conversation_id`. The SDK does not remember the last id for you.
+- A refused id raises `MitraError` with `code` `conversation_not_found`, `conversation_expired`, `conversation_other_source`,
+  `conversation_too_long` or `previous_conversation_id_required`.
+
 ## 0.2.0 - 2026-11-02
 
 Viewer identity for embeds. Contract: `docs/EMBEDS.md` section 3.1b in matih-labs/mitra.

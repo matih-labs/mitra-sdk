@@ -166,6 +166,26 @@ await mitra.files.list();
 await mitra.files.delete(file.id);
 ```
 
+## Change data
+
+Needs `data:write` and the Write permission on the source. Every call is its own request and its reply carries
+its own `conversation_id`. To continue from an earlier reply (a yes to the change it is holding, a
+cancel, a pick from its list), pass that reply's `conversation_id` as `previousConversationId`.
+If you need older context, pass the previous id: it can itself have its own previous id, and the
+chain is followed as far back as it goes (only the 10 minute hold and undo windows limit it). Leave it
+out and the call starts fresh; a call that would answer a change that is waiting, with no id named, is
+refused (`previous_conversation_id_required`) rather than guessed.
+
+```ts
+const asked = await mitra.changes.update({ text: "set Pen to 5", sourceId: "s1" }); // asks first: asked.pending_id
+const done = await mitra.changes.confirm(asked.pending_id!, { previousConversationId: asked.conversation_id! });
+await mitra.changes.undo(done.change_id!); // within 10 minutes
+```
+
+A refused id raises `MitraError` with its `code`: `conversation_not_found` (404), `conversation_expired` (410),
+`conversation_other_source` (409), `conversation_too_long` (422, over 1000 requests in one chain) or
+`previous_conversation_id_required` (409).
+
 ## Members and invitations
 
 Need `members:read` and `members:manage`.

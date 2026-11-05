@@ -16,6 +16,7 @@ MCP setup guide, an agent skill, and examples such as a Slack bot.
 - Read Gems (evidence-backed findings), each with a chart image
 - Ask questions in plain language, in any of 22 Indian languages (text or a voice note), and get
   an answer, the data and a chart image
+- Change data in a source from a sentence (`changes.update`), answer what it asks back, undo it; pass an earlier reply's `conversation_id` as `previous_conversation_id` to continue from it (a previous id can itself have its own previous id)
 - Get a dashboard as an image
 - Ask predictive questions (forecasts, what-ifs) as background jobs
 - Embed a dashboard (with per-viewer row filters), a Gems feed or an Ask box in your own product: mint a short-lived token on your backend, show it with the `<matih-embed>` element
@@ -106,7 +107,7 @@ works only on `/api/v1/mcp` and is refused with 401 elsewhere. Use a connector k
 
 `workspaces:read`, `members:read`, `members:manage`, `sources:read`, `sources:write`,
 `files:read`, `files:write`, `gems:read`, `gems:generate`, `ask`, `dashboards:read`, `predict`,
-`embeds:create`, `embeds:read`, `webhooks:manage`. File endpoints use `files:*` (`GET /files` and `GET /files/{id}` need
+`data:write`, `embeds:create`, `embeds:read`, `webhooks:manage`. File endpoints use `files:*` (`GET /files` and `GET /files/{id}` need
 `files:read`; upload, duplicate and delete need `files:write`).
 A key or token never exceeds the role of the member it acts as, whatever scopes it has.
 

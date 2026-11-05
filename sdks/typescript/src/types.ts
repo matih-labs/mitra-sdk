@@ -725,6 +725,54 @@ export interface EmbedOrigins {
   origins: string[];
 }
 
+/**
+ * The reply of every call of `changes` (a change, its confirm, cancel, pick or undo, a read of one).
+ *
+ * `conversation_id` is this request's own id. Pass it as `previousConversationId` on the next call
+ * to continue from this one: ids chain (A, then B, then C), a previous id can itself have its own
+ * previous id, and the server follows the chain as far back as it goes. `null` on an undo or a read
+ * of a change that was made in no request of yours.
+ */
+export interface ChangeReply {
+  code?: string | null;
+  message?: string | null;
+  conversation_id?: string | null;
+  change_id?: string | null;
+  batch_id?: string | null;
+  pending_id?: string | null;
+  items?: Record<string, unknown>[];
+  choices?: Record<string, unknown>[];
+  undoable?: boolean | null;
+  expires_in?: number | null;
+  [key: string]: unknown;
+}
+
+/** What a call that continues from an earlier reply takes. */
+export interface ChainParams {
+  /**
+   * The `conversation_id` of the earlier reply to continue from. If you need older context, pass
+   * the previous id: it can itself have its own previous id, and the chain is followed as far back
+   * as it goes (only the 10 minute hold and undo windows limit it). Leave it out to start fresh.
+   */
+  previousConversationId?: string;
+}
+
+export interface UpdateParams extends ChainParams {
+  /** The sentence to act on. A "yes", "no" or "undo that" refers to the end of the chain named by `previousConversationId`. */
+  text?: string;
+  sourceId?: string;
+  /** One structured item instead of `text`. */
+  item?: Record<string, unknown>;
+  /** Apply at once instead of asking first. */
+  confirm?: boolean;
+}
+
+export interface BatchParams extends ChainParams {
+  items: (string | Record<string, unknown>)[];
+  sourceId?: string;
+  confirm?: boolean;
+}
+
 export interface ConversationMessage {
   id: string;
   role: string;

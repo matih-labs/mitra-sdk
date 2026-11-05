@@ -20,6 +20,7 @@ from .errors import (
 from .models import (
     Answer,
     Catalog,
+    ChangeReply,
     Clarification,
     Connector,
     ConnectorField,
@@ -75,6 +76,7 @@ __all__ = [
     "AuthError",
     "BusyError",
     "Catalog",
+    "ChangeReply",
     "Clarification",
     "Connector",
     "ConnectorField",
