@@ -760,6 +760,9 @@ export interface ChangeReply {
   queue_window_seconds?: number;
   record?: Record<string, unknown>;
   open?: Record<string, unknown>[];
+  /** A yes that found a question of Matih's open instead of a change: true, with the `source` it waits on. */
+  open_question?: boolean;
+  source?: string;
   asks?: unknown;
   [key: string]: unknown;
 }
@@ -787,6 +790,16 @@ export interface UpdateParams extends ChainParams {
 export interface BatchParams extends ChainParams {
   items: (string | Record<string, unknown>)[];
   sourceId?: string;
+  confirm?: boolean;
+}
+
+/** What `changes.batchFromFile` takes besides the file. */
+export interface BatchFileParams extends ChainParams {
+  /** The file name; its extension (`.csv`, `.xlsx`) tells the server the type. */
+  filename?: string;
+  contentType?: string;
+  sourceId?: string;
+  /** Apply at once instead of asking first. */
   confirm?: boolean;
 }
 

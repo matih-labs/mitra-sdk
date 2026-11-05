@@ -12,7 +12,12 @@ class MitraError(Exception):
         message: Human-readable message from the API.
         status: HTTP status code, when the error came from a response.
         category: API error category, for example ``scope``, ``not_ready`` or ``rate_limited``.
-        code: Optional machine-readable code.
+            ``None`` when the body carries none: a ``/changes`` reply that was not made (``{code, message, ...}``,
+            for example ``HEAVY_CONFIRM``) has a ``code`` and no category, in this SDK and in the TypeScript one.
+            Branch on ``code`` there.
+        code: Optional machine-readable code. For a ``/changes`` call it is the reply's own code
+            (``HEAVY_CONFIRM``, ``ALREADY_UNDONE``, ...) or the word of a refusal (``conversation_expired``,
+            ``idempotency_key_reused``, ``idempotency_key_in_progress``, ...).
         request_id: Value of the ``x-request-id`` response header, quote it in support requests.
         body: The decoded response body, if any.
         extra: Every other field of the error (``detail`` or top-level body), for example the
@@ -70,17 +75,23 @@ class AuthError(MitraError):
 
 
 class PermissionDeniedError(MitraError):
-    """403: category ``scope``, ``workspace_role``, ``workspace`` or ``source_access``."""
+    """403: category ``scope``, ``workspace_role``, ``workspace`` or ``source_access``. A refused change
+    (``NOT_ALLOWED``, ``WRITES_OFF``, ``READ_ONLY_SOURCE``, ``REQUEST_REJECTED``, ``KEY_READ_ONLY``,
+    ``KEY_SOURCE_NOT_ALLOWED``) has no category: branch on ``code``."""
 
 
 class CreditsError(MitraError):
-    """402: category ``not_ready`` (the workspace has no credits left) or ``member_cap``."""
+    """402: category ``not_ready`` (the workspace has no credits left) or ``member_cap``. A change call
+    answers it as ``NO_CREDITS`` or ``MEMBER_CAP`` with no category: branch on ``code``."""
 
 
 class BusyError(MitraError):
     """409: a conflict with the current state: revoking an invitation that is no longer open,
-    answering a file that is not waiting for a decision, or a workspace already at its 20
-    webhooks. Read ``category``, ``code`` and ``message``."""
+    answering a file that is not waiting for a decision, a workspace already at its 20 webhooks, or, on
+    ``client.changes``, ``HEAVY_CONFIRM`` (``pending_id``), ``CONFLICT``,
+    ``NOTHING_TO_UNDO``, ``conversation_other_source``, ``previous_conversation_id_required`` and
+    ``idempotency_key_in_progress`` (the first request with that key is still running: wait, then
+    send the same call with the same key). Read ``code``, ``category`` and ``message``."""
 
 
 class RateLimitError(MitraError):

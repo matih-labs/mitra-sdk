@@ -129,25 +129,49 @@ client.changes.undo(done.change_id)                                  # within 10
 the 0-based `index` of a choice from `reply.choices`.
 
 Every write call sends its own `Idempotency-Key` (pass `idempotency_key=` to use yours). The server dedupes `update`,
-`batch`, `confirm`, `choose`, `cancel` and `undo` on that key, so a retry with the same key returns the original reply
-instead of acting twice.
+`batch`, `confirm`, `choose`, `cancel`, `undo` and `undo_batch` on that key, so a retry with the same key returns the
+original reply instead of acting twice, and the client's own retries (a 429, a 5xx, a dropped connection, a timeout) keep
+the key. Only a reply the server kept is replayed: after a 5xx (`SOURCE_ERROR`, `SOURCE_UNREACHABLE`), `NO_CREDITS` or
+`MEMBER_CAP` the same key runs again and may answer differently. Use one key for one request, and never share a key
+between `update`/`batch` and the answer calls. `batch_from_file` takes no key (the server has none on that route), so it
+is not retried after a 5xx or a timeout.
+
+If the first request with a key is still running, the server waits up to 60 s and then answers 409
+`idempotency_key_in_progress` (`BusyError`): wait, then send the same call with the same `idempotency_key` again. Change
+calls allow a read of at least 75 s, so you see that 409 and not a timeout.
+
+A batch takes a list of sentences or items, and its reply has one entry per item in `items` and a `batch_id`:
+
+```python
+done = client.changes.batch(["set Pen to 5", "set Orbit Lamp to 120"], source_id="s1")
+client.changes.get_batch(done.batch_id)        # what happened to each item
+client.changes.undo_batch(done.batch_id)       # reverse the whole batch, within 10 minutes
+client.changes.batch_from_file("rows.csv", source_id="s1")   # a CSV or .xlsx, 2 MB at most: a header row, one change per row
+```
 
 A change the server did not make is not a `ChangeReply`: it answers with a non-2xx status and raises `MitraError`
 (`BusyError` for 409) with the reply's `code` and `message` (`HEAVY_CONFIRM`, `ALREADY_UNDONE`, `UNDO_EXPIRED`,
-`CONFIRM_EXPIRED`, `NO_MATCH`, `NOTHING_TO_UNDO`, ...). Its other fields are on the error: `err.pending_id`, `err.choices`
-and the rest in `err.extra` (`rows`, `credits`, `conversation_id`, ...).
+`CONFIRM_EXPIRED`, `NO_MATCH`, `NOTHING_TO_UNDO`, ...); a 402 raises `CreditsError` (`NO_CREDITS`, `MEMBER_CAP`), a 403
+`PermissionDeniedError` (`NOT_ALLOWED`, `WRITES_OFF`, `READ_ONLY_SOURCE`, `KEY_SOURCE_NOT_ALLOWED`) and a 502 `MitraError`
+(`SOURCE_ERROR`, `SOURCE_UNREACHABLE`). Its other fields are on the error: `err.pending_id`, `err.choices`
+and the rest in `err.extra` (`rows`, `credits`, `conversation_id`, ...). That body has no `category`, so `err.category`
+is `None` for a change reply: branch on `err.code`. A code this SDK has never heard of is raised as it came.
+
+A batch over 25 rows, and a single `update` that touches many, is held for a yes with 409 `HEAVY_CONFIRM`. Repeat the batch
+with `confirm=True` (the documented path); a held `update` is answered with `confirm(err.pending_id, ...)`:
 
 ```python
 try:
     client.changes.batch(rows)                                       # over 25 rows: 409 HEAVY_CONFIRM
 except BusyError as err:
     if err.code == "HEAVY_CONFIRM":
-        client.changes.confirm(err.pending_id, previous_conversation_id=err.extra["conversation_id"])
+        client.changes.batch(rows, confirm=True, previous_conversation_id=err.extra["conversation_id"])
 ```
 
 A refused conversation id raises `MitraError` with `code` `conversation_not_found` (404), `conversation_expired` (410),
 `conversation_other_source` (409) or `conversation_too_long` (422, over 1000 requests in one chain). The same
-`idempotency_key` with another `previous_conversation_id` is a 422 whose `category` (not `code`) is `idempotency_key_reused`.
+`idempotency_key` with another `previous_conversation_id` or request is a 422 whose `code` and `category` are both
+`idempotency_key_reused`. A request with neither `text` nor `item` is a 422 `invalid_request` (a `category`, no `code`).
 
 ## Members and invitations
 
@@ -348,6 +372,10 @@ client = Mitra(
 - **Per call**, any method takes `request_timeout=` (seconds or an `httpx.Timeout`), `max_retries=` and
   `deadline=`: a limit in seconds on the whole call, every attempt and every pause between them. The
   deadline also shortens each attempt, so `deadline=5` never runs for longer than 5 s.
+- **Change calls** (`changes.update`, `batch`, `confirm`, `choose`, `cancel`, `undo`, `undo_batch`) read for at least 75 s
+  whatever the client timeout is, because the server holds a call whose key is still running for up to 60 s before it
+  answers 409 `idempotency_key_in_progress`. A `request_timeout=` you pass is kept as given. A change call that does time
+  out is retried with the same key.
 - **Retries** apply to 429 on every call, and to 408, 500, 502, 503, 504 and network failures only on
   calls that are safe to repeat (`GET`, `PUT`, `DELETE`, or a call with an idempotency key). Other 4xx are
   never retried. Waits grow as 0.5 s, 1 s, 2 s ... capped at 8 s, each randomised to 50 to 100 percent so
@@ -361,7 +389,8 @@ client = Mitra(
 ## Errors
 
 All API errors derive from `MitraError` with `.status`, `.category`, `.code`, `.request_id` and
-`.body`. Subclasses: `AuthError` (401), `PermissionDeniedError` (403: `scope`, `workspace_role`,
+`.body`. `.category` is `None` when the body has none (a change reply from `changes.*`, which is told by its `.code`; the
+TypeScript SDK gives `undefined`). Subclasses: `AuthError` (401), `PermissionDeniedError` (403: `scope`, `workspace_role`,
 `source_access`), `CreditsError` (402: `not_ready`, `member_cap`), `BusyError` (409, a conflict with the current state),
 `RateLimitError` (429, `.retry_after`), `EmbedRefusedError` (422 from `embeds.create`, read `.code`), `EmbedNotFoundError` (404 from `embeds.create` and `embeds.revoke`), `SourceTestFailedError` (422 from `sources.create`, `.test_result`), plus `JobFailedError`, `JobTimeoutError`. 429 is retried
 automatically (honouring `Retry-After`) up to `max_retries` (default 2), as are 5xx and network

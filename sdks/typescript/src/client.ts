@@ -13,6 +13,7 @@ import { isTerminalJob } from "./types.js";
 import type {
   Answer,
   BatchParams,
+  BatchFileParams,
   ChainParams,
   ChangeReply,
   AskOptions,
@@ -906,26 +907,42 @@ class ConversationsApi {
 }
 
 /**
+ * The least read time, in milliseconds, of a change call that carries an Idempotency-Key. The server waits up
+ * to 60 s on a key whose first request is still running and then answers 409 `idempotency_key_in_progress`;
+ * a longer read means that answer is seen instead of a timeout.
+ */
+const CHANGE_READ_MS = 75_000;
+
+/**
  * Change data in a source from a sentence, and answer what it asks back (`data:write`).
  *
- * Every call is its own request and its reply carries its own `conversation_id`. To continue from
- * an earlier reply (a yes to the change it is holding, an undo of it), pass that reply's
- * `conversation_id` as `previousConversationId`. If you need older context, pass the previous id:
- * it can itself have its own previous id, and the chain is followed as far back as it goes (only
- * the 10 minute hold and undo windows limit it). Leave it out and the call starts fresh. The server
- * refuses an id that is not yours or is older than 10 minutes (404 `conversation_not_found`, 410
- * `conversation_expired`), one on another source (409 `conversation_other_source`), a chain over
- * 1000 requests (422 `conversation_too_long`) and the same idempotency key with another previous id
- * (422, `category` `idempotency_key_reused`).
+ * Every call is its own request and its reply carries its own `conversation_id`. To continue from an earlier
+ * reply (a yes to the change it is holding, an undo of it), pass that reply's `conversation_id` as
+ * `previousConversationId`. If you need older context, pass the previous id: it can itself have its own
+ * previous id, and the chain is followed as far back as it goes (only the 10 minute hold and undo windows
+ * limit it). Leave it out and the call starts fresh. The server refuses an id that is not yours or is older than 10 minutes (404
+ * `conversation_not_found`, 410 `conversation_expired`), one on another source (409
+ * `conversation_other_source`), a chain over 1000 requests (422 `conversation_too_long`) and the same
+ * Idempotency-Key with another previous id or request (422, `code` and `category` both
+ * `idempotency_key_reused`).
  *
- * Every write call sends its own `Idempotency-Key` unless you pass `idempotencyKey` in the request
- * options; a retry (the client's own, or yours with the same key) returns the original reply instead
- * of acting twice.
+ * Every call that acts sends its own Idempotency-Key unless you pass `idempotencyKey`; a retry (the client's
+ * own, or yours with the same key) returns the original reply instead of acting twice. Only a reply the
+ * server kept is replayed: after a 5xx (`SOURCE_ERROR`, `SOURCE_UNREACHABLE`), `IN_PROGRESS`, `NO_CREDITS` or
+ * `MEMBER_CAP` the same key does the work again and may answer differently. Use one key for one request: the
+ * 422 for a key reused on another request is not guaranteed between `update`/`batch` and the answer calls
+ * (confirm, cancel, choose, undo, undoBatch), so never share a key across them. `batchFromFile` is the
+ * exception: the server takes no key on that route, so it is never retried after a 5xx or a timeout. If the
+ * first request with a key is still running, the server waits up to 60 s and then answers 409
+ * `idempotency_key_in_progress` (`BusyError`): wait, then send the same call with the same `idempotencyKey`
+ * again. These calls allow a read of at least 75 s, so the 409 is seen rather than a
+ * timeout; a call that does time out is retried with its key.
  *
- * A change the server did not make answers with a non-2xx status and a body of `{code, message, ...}`
- * (409 `HEAVY_CONFIRM` with `pending_id`, 410 `ALREADY_UNDONE`, 404 `NO_MATCH`, ...). It throws a
- * `MitraError` (`BusyError` for 409) with that `code` and `message`; `pendingId`, `choices` and every
- * other field of the body are on the error (`err.pendingId`, `err.extra`).
+ * A change the server did not make answers with a non-2xx status and a body of `{code, message, ...}` (409
+ * `HEAVY_CONFIRM` with `pending_id`, 410 `ALREADY_UNDONE`, 404 `NO_MATCH`, ...). It throws `MitraError`
+ * (`BusyError` for 409, `CreditsError` for 402, `PermissionError` for 403) with that `code` and `message`;
+ * `pending_id`, `choices` and every other field of the body are in `err.extra`. That body has no category, so
+ * `err.category` is `undefined` (Python: `None`): branch on `code`.
  */
 class ChangesApi {
   constructor(private readonly http: HttpClient) {}
@@ -934,7 +951,14 @@ class ChangesApi {
     const json: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) if (value !== undefined) json[key] = value;
     if (chain?.previousConversationId) json["previous_conversation_id"] = chain.previousConversationId;
-    return this.http.json<ChangeReply>({ method: "POST", path, json, autoIdempotency: true, request: opts });
+    const timeoutMs = opts?.timeoutMs ?? Math.max(this.http.config.timeoutMs, CHANGE_READ_MS);
+    return this.http.json<ChangeReply>({
+      method: "POST",
+      path,
+      json,
+      autoIdempotency: true,
+      request: { ...opts, timeoutMs },
+    });
   }
 
   /** `POST /changes`: change data from `text` (or one structured `item`). */
@@ -947,6 +971,27 @@ class ChangesApi {
   batch(params: BatchParams, opts?: RequestOptions): Promise<ChangeReply> {
     const { items, sourceId, confirm } = params;
     return this.post("/changes/batch", { items, source_id: sourceId, confirm: confirm || undefined }, params, opts);
+  }
+
+  /**
+   * `POST /changes/batch/file`: a CSV or `.xlsx` (2 MB at most, a header row, then one change per row) sent as a
+   * multipart upload; the reply is the same as `batch`. The server takes no Idempotency-Key on this route, so
+   * none is sent (an `idempotencyKey` in `opts` is dropped) and a failed call is not retried after a 5xx or a
+   * timeout (that could change the rows twice). The type is taken from the file name's extension: pass
+   * `filename` for bytes.
+   */
+  batchFromFile(file: BinaryInput, params: BatchFileParams = {}, opts?: RequestOptions): Promise<ChangeReply> {
+    const form = new FormData();
+    form.append("file", toBlob(file, params.contentType), params.filename ?? "upload");
+    if (params.sourceId) form.append("source_id", params.sourceId);
+    if (params.previousConversationId) form.append("previous_conversation_id", params.previousConversationId);
+    if (params.confirm) form.append("confirm", "true");
+    return this.http.json<ChangeReply>({
+      method: "POST",
+      path: "/changes/batch/file",
+      form,
+      request: { ...opts, idempotencyKey: undefined },
+    });
   }
 
   /** `POST /changes/pending/{id}/confirm`: apply the change that waits for a yes (`choice` answers a numbered list and is 1-based: 1 is the first). */
@@ -967,6 +1012,16 @@ class ChangesApi {
   /** `POST /changes/{id}/undo` (within 10 minutes). `conversation_id` is the one of the request that made the change, to continue from; `null` if it was made in none. */
   undo(changeId: string, opts?: RequestOptions): Promise<ChangeReply> {
     return this.post(`/changes/${enc(changeId)}/undo`, {}, undefined, opts);
+  }
+
+  /** `POST /changes/batch/{id}/undo`: reverse every change of a batch made in the last 10 minutes, by id and in no conversation. `batchId` is the `batch_id` of a `batch` reply. */
+  undoBatch(batchId: string, opts?: RequestOptions): Promise<ChangeReply> {
+    return this.post(`/changes/batch/${enc(batchId)}/undo`, {}, undefined, opts);
+  }
+
+  /** `GET /changes/batch/{id}`: what happened to each item (`items`). 404 also for another member's batch. `conversation_id` names the request that made it. */
+  getBatch(batchId: string, opts?: RequestOptions): Promise<ChangeReply> {
+    return this.http.json<ChangeReply>({ method: "GET", path: `/changes/batch/${enc(batchId)}`, request: opts });
   }
 
   /** `GET /changes/{id}`; `conversation_id` names the request that made it. */

@@ -690,6 +690,12 @@ class _Conversations(_Resources):
         )
 
 
+# The server holds a change call whose Idempotency-Key is still running for 60 s, then answers 409
+# ``idempotency_key_in_progress``. The read must outlast that wait, or this client gives up (and retries)
+# just before the answer arrives.
+CHANGE_READ_SECONDS = 75.0
+
+
 class _Changes(_Resources):
     """Change data in a source from a sentence, and answer what it asks back (``data:write``).
 
@@ -701,15 +707,33 @@ class _Changes(_Resources):
     refuses an id that is not yours or is older than 10 minutes (404 ``conversation_not_found``, 410
     ``conversation_expired``), one on another source (409 ``conversation_other_source``), a chain
     over 1000 requests (422 ``conversation_too_long``) and the same ``Idempotency-Key`` with another
-    previous id (422, ``category`` ``idempotency_key_reused``).
+    previous id or request (422, ``code`` and ``category`` both ``idempotency_key_reused``).
 
-    Every call sends its own ``Idempotency-Key`` unless you pass ``idempotency_key``; a retry (the client's
-    own, or yours with the same key) returns the original reply instead of acting twice.
+    Every call that acts sends its own ``Idempotency-Key`` unless you pass ``idempotency_key``; a retry
+    (the client's own, or yours with the same key) returns the original reply instead of acting twice.
+    Only a reply the server kept is replayed: after a 5xx (``SOURCE_ERROR``, ``SOURCE_UNREACHABLE``),
+    ``IN_PROGRESS``, ``NO_CREDITS`` or ``MEMBER_CAP`` the same key does the work again and may answer
+    differently. Use one key for one request: the 422 for a key reused on another request is not
+    guaranteed between ``update``/``batch`` and the answer calls (confirm, cancel, choose, undo,
+    ``undo_batch``), so never share a key across them.
+    ``batch_from_file`` is the exception: the server takes no key on that route, so it is never
+    retried after a 5xx or a timeout. If the first request with a key is still running, the server
+    waits up to 60 s and then answers 409 ``idempotency_key_in_progress`` (``BusyError``): wait, then
+    send the same call with the same ``idempotency_key`` again. These calls allow a read of at least
+    75 s, so the 409 is seen rather than a timeout; a call that does time out is retried with its key.
 
     A change the server did not make answers with a non-2xx status and a body of ``{code, message, ...}``
     (409 ``HEAVY_CONFIRM`` with ``pending_id``, 410 ``ALREADY_UNDONE``, 404 ``NO_MATCH``, ...). It raises
-    ``MitraError`` (``BusyError`` for 409) with that ``code`` and ``message``; ``pending_id``, ``choices``
-    and every other field of the body are on the error (``err.pending_id``, ``err.extra``)."""
+    ``MitraError`` (``BusyError`` for 409, ``CreditsError`` for 402, ``PermissionDeniedError`` for 403)
+    with that ``code`` and ``message``; ``pending_id``, ``choices`` and every other field of the body
+    are on the error (``err.pending_id``, ``err.extra``). That body has no ``category``, so
+    ``err.category`` is ``None``: branch on ``code``."""
+
+    def _patient(self, opts: dict[str, Any]) -> dict[str, Any]:
+        """``opts`` with a read time that outlasts the server's 60 s wait on a busy key, unless the caller set one."""
+        if opts.get("request_timeout") is None:
+            opts["request_timeout"] = _core.with_read(self._c.settings.timeout, CHANGE_READ_SECONDS)
+        return opts
 
     def update(
         self,
@@ -729,7 +753,8 @@ class _Changes(_Resources):
             previous_conversation_id,
         )
         return self._c.request(
-            "POST", "/changes", json_body=body, parse=ChangeReply.model_validate, idempotent=True, **opts
+            "POST", "/changes", json_body=body, parse=ChangeReply.model_validate, idempotent=True,
+            **self._patient(opts),
         )
 
     def batch(
@@ -748,7 +773,7 @@ class _Changes(_Resources):
         )
         return self._c.request(
             "POST", "/changes/batch", json_body=body, parse=ChangeReply.model_validate,
-            idempotent=True, **opts,
+            idempotent=True, **self._patient(opts),
         )
 
     def confirm(
@@ -765,7 +790,7 @@ class _Changes(_Resources):
         return self._c.request(
             "POST", f"/changes/pending/{quote(pending_id, safe='')}/confirm",
             json_body=_change_body({"choice": choice}, previous_conversation_id),
-            parse=ChangeReply.model_validate, idempotent=True, **opts,
+            parse=ChangeReply.model_validate, idempotent=True, **self._patient(opts),
         )
 
     def choose(
@@ -781,7 +806,7 @@ class _Changes(_Resources):
         return self._c.request(
             "POST", f"/changes/pending/{quote(pending_id, safe='')}/choose",
             json_body=_change_body({"index": index}, previous_conversation_id),
-            parse=ChangeReply.model_validate, idempotent=True, **opts,
+            parse=ChangeReply.model_validate, idempotent=True, **self._patient(opts),
         )
 
     def cancel(
@@ -791,7 +816,7 @@ class _Changes(_Resources):
         return self._c.request(
             "POST", f"/changes/pending/{quote(pending_id, safe='')}/cancel",
             json_body=_change_body({}, previous_conversation_id),
-            parse=ChangeReply.model_validate, idempotent=True, **opts,
+            parse=ChangeReply.model_validate, idempotent=True, **self._patient(opts),
         )
 
     def undo(self, change_id: str, **opts: _Opts) -> Any:
@@ -799,13 +824,63 @@ class _Changes(_Resources):
         one of the request that made the change, to continue from; ``None`` if it was made in none."""
         return self._c.request(
             "POST", f"/changes/{quote(change_id, safe='')}/undo",
-            parse=ChangeReply.model_validate, idempotent=True, **opts,
+            parse=ChangeReply.model_validate, idempotent=True, **self._patient(opts),
         )
 
     def get(self, change_id: str, **opts: _Opts) -> Any:
         """``GET /changes/{change_id}``; ``conversation_id`` names the request that made it."""
         return self._c.request(
             "GET", f"/changes/{quote(change_id, safe='')}", parse=ChangeReply.model_validate, **opts
+        )
+
+    def batch_from_file(
+        self,
+        file: str | os.PathLike[str] | bytes | BinaryIO,
+        *,
+        filename: str | None = None,
+        content_type: str | None = None,
+        source_id: str | None = None,
+        confirm: bool = False,
+        previous_conversation_id: str | None = None,
+        **opts: _Opts,
+    ) -> Any:
+        """``POST /changes/batch/file``: a CSV or ``.xlsx`` (2 MB at most, a header row, then one change per
+        row) sent as a multipart upload; the reply is the same as ``batch``. The server takes no
+        ``Idempotency-Key`` on this route, so none is sent (an ``idempotency_key`` you pass is dropped) and a
+        failed call is not retried after a 5xx or a timeout (that could change the rows twice). The type is
+        taken from the file name's extension: pass ``filename`` for bytes or a stream."""
+        fields = {"source_id": source_id, "previous_conversation_id": previous_conversation_id,
+                  "confirm": "true" if confirm else None}
+        fields = {k: v for k, v in fields.items() if v}
+        opts.pop("idempotency_key", None)  # the route takes none; a key would make a failed call retry
+        stack = contextlib.ExitStack()
+        part = stack.enter_context(_file_part(file, filename, content_type))
+        try:
+            result = self._c.request(
+                "POST", "/changes/batch/file", files={"file": part}, data=fields,
+                parse=ChangeReply.model_validate, **opts,
+            )
+        except BaseException:
+            stack.close()
+            raise
+        if asyncio.iscoroutine(result):  # AsyncMitra: keep the file open until the await ends
+            return _close_after(result, stack)
+        stack.close()
+        return result
+
+    def undo_batch(self, batch_id: str, **opts: _Opts) -> Any:
+        """``POST /changes/batch/{batch_id}/undo``: reverse every change of a batch made in the last 10
+        minutes, by id and in no conversation. ``batch_id`` is the ``batch_id`` of a ``batch`` reply."""
+        return self._c.request(
+            "POST", f"/changes/batch/{quote(batch_id, safe='')}/undo",
+            parse=ChangeReply.model_validate, idempotent=True, **self._patient(opts),
+        )
+
+    def get_batch(self, batch_id: str, **opts: _Opts) -> Any:
+        """``GET /changes/batch/{batch_id}``: what happened to each item (``items``). 404 also for another
+        member's batch. ``conversation_id`` names the request that made it."""
+        return self._c.request(
+            "GET", f"/changes/batch/{quote(batch_id, safe='')}", parse=ChangeReply.model_validate, **opts
         )
 
 

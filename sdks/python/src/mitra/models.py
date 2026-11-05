@@ -131,7 +131,8 @@ class ChangeReply(_Model):
     undoable: bool | None = None
     expires_in: int | None = None
     # Present only when the server says them: a change queued for a shop computer, a saved row read back, a
-    # yes or no that found several things waiting (``open``).
+    # yes or no that found several things waiting (``open``), and a yes that found a question of
+    # Matih's open instead of a change (``open_question``, with the ``source`` it waits on).
     queued_for: str | None = None
     retry_after: int | None = None
     queue_reason: str | None = None
@@ -141,6 +142,8 @@ class ChangeReply(_Model):
     queue_window_seconds: int | None = None
     record: dict[str, Any] | None = None
     open: list[dict[str, Any]] | None = None
+    open_question: bool | None = None
+    source: str | None = None
     asks: Any = None
 
 

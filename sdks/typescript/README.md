@@ -186,27 +186,55 @@ await mitra.changes.undo(done.change_id!); // within 10 minutes
 the 0-based `index` of a choice from `reply.choices`.
 
 Every write call sends its own `Idempotency-Key` (pass `{ idempotencyKey }` as the request options to use yours). The server
-dedupes `update`, `batch`, `confirm`, `choose`, `cancel` and `undo` on that key, so a retry with the same key returns the
-original reply instead of acting twice.
+dedupes `update`, `batch`, `confirm`, `choose`, `cancel`, `undo` and `undoBatch` on that key, so a retry with the same key
+returns the original reply instead of acting twice, and the client's own retries (a 429, a 5xx, a dropped connection, a
+timeout) keep the key. Only a reply the server kept is replayed: after a 5xx (`SOURCE_ERROR`, `SOURCE_UNREACHABLE`),
+`NO_CREDITS` or `MEMBER_CAP` the same key runs again and may answer differently. Use one key for one request, and never
+share a key between `update`/`batch` and the answer calls. `batchFromFile` takes no key (the server has none on that
+route), so it is not retried after a 5xx or a timeout.
+
+If the first request with a key is still running, the server waits up to 60 s and then answers 409
+`idempotency_key_in_progress` (`BusyError`): wait, then send the same call with the same `idempotencyKey` again. Change
+calls allow a read of at least 75 s, so you see that 409 and not a timeout.
+
+A batch takes a list of sentences or items, and its reply has one entry per item in `items` and a `batch_id`:
+
+```ts
+const done = await mitra.changes.batch({ items: ["set Pen to 5", "set Orbit Lamp to 120"], sourceId: "s1" });
+await mitra.changes.getBatch(done.batch_id!); // what happened to each item
+await mitra.changes.undoBatch(done.batch_id!); // reverse the whole batch, within 10 minutes
+await mitra.changes.batchFromFile(csvBytes, { filename: "rows.csv", sourceId: "s1" }); // a CSV or .xlsx, 2 MB at most: a header row, one change per row
+```
 
 A change the server did not make is not a `ChangeReply`: it answers with a non-2xx status and throws a `MitraError`
 (`BusyError` for 409) with the reply's `code` and `message` (`HEAVY_CONFIRM`, `ALREADY_UNDONE`, `UNDO_EXPIRED`,
-`CONFIRM_EXPIRED`, `NO_MATCH`, `NOTHING_TO_UNDO`, ...). Its other fields are on the error: `err.pendingId`, `err.choices`
-and the rest in `err.extra` (`rows`, `credits`, `conversation_id`, ...).
+`CONFIRM_EXPIRED`, `NO_MATCH`, `NOTHING_TO_UNDO`, ...); a 402 throws `CreditsError` (`NO_CREDITS`, `MEMBER_CAP`), a 403
+`PermissionError` (`NOT_ALLOWED`, `WRITES_OFF`, `READ_ONLY_SOURCE`, `KEY_SOURCE_NOT_ALLOWED`) and a 502 `MitraError`
+(`SOURCE_ERROR`, `SOURCE_UNREACHABLE`). Its other fields are on the error: `err.pendingId`, `err.choices`
+and the rest in `err.extra` (`rows`, `credits`, `conversation_id`, ...). That body has no `category`, so `err.category` is
+`undefined` for a change reply: branch on `err.code`. A code this SDK has never heard of is thrown as it came.
+
+A batch over 25 rows, and a single `update` that touches many, is held for a yes with 409 `HEAVY_CONFIRM`. Repeat the batch
+with `confirm: true` (the documented path); a held `update` is answered with `confirm(err.pendingId!, ...)`:
 
 ```ts
 try {
   await mitra.changes.batch({ items: rows }); // over 25 rows: 409 HEAVY_CONFIRM
 } catch (err) {
   if (err instanceof BusyError && err.code === "HEAVY_CONFIRM") {
-    await mitra.changes.confirm(err.pendingId!, { previousConversationId: err.extra["conversation_id"] as string });
+    await mitra.changes.batch({
+      items: rows,
+      confirm: true,
+      previousConversationId: err.extra["conversation_id"] as string,
+    });
   }
 }
 ```
 
 A refused conversation id throws a `MitraError` with `code` `conversation_not_found` (404), `conversation_expired` (410),
 `conversation_other_source` (409) or `conversation_too_long` (422, over 1000 requests in one chain). The same idempotency key
-with another `previousConversationId` is a 422 whose `category` (not `code`) is `idempotency_key_reused`.
+with another `previousConversationId` or request is a 422 whose `code` and `category` are both `idempotency_key_reused`. A
+request with neither `text` nor `item` is a 422 `invalid_request` (a `category`, no `code`).
 
 ## Members and invitations
 
@@ -354,6 +382,10 @@ const client = new Mitra({
 - `timeoutMs` (default 60 s) limits one attempt, up to the response headers. For a stream it limits each
   silence between events, since the server sends a heartbeat every 10 s. A request that asks the server to
   wait (`wait: N`, sent as `Prefer: wait=N`) gets that wait plus 15 s.
+- **Change calls** (`changes.update`, `batch`, `confirm`, `choose`, `cancel`, `undo`, `undoBatch`) wait at least 75 s per
+  attempt whatever `timeoutMs` is, because the server holds a call whose key is still running for up to 60 s before it
+  answers 409 `idempotency_key_in_progress`. A `timeoutMs` you pass for one call is kept as given. A change call that does
+  time out is retried with the same key.
 - **Per call**: `timeoutMs`, `maxRetries`, `signal` (an `AbortSignal` that cancels the request and its
   retries) and `deadlineMs`, a limit on the whole call, every attempt and every pause between them. The
   deadline shortens each attempt as well, so `deadlineMs: 5000` never runs past 5 s.
@@ -367,6 +399,8 @@ const client = new Mitra({
 ## Errors
 
 Every API failure is a `MitraError` with `status`, `category`, `code`, `message`, `requestId` (from `x-request-id`) and `body`.
+`category` is `undefined` when the body has none (a change reply from `changes.*`, which is told by its `code`; the Python
+SDK gives `None`).
 
 | Class | When |
 | --- | --- |

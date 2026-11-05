@@ -9,8 +9,11 @@ released together: one tag `vX.Y.Z` publishes `mitra-sdk` to PyPI and `@matihlab
 Changing data from a sentence, and continuing a conversation. Contract: `docs/public-api/endpoints.md` ("Changes")
 in matih-labs/mitra.
 
-- New `changes` resource on both clients (scope `data:write`): `update`, `batch`, `confirm`, `choose`, `cancel`, `undo`, `get`
-  (Python `ChangeReply`; TypeScript `ChangeReply`, `UpdateParams`, `BatchParams`, `ChainParams`).
+- New `changes` resource on both clients (scope `data:write`): `update`, `batch`, `batch_from_file`, `confirm`, `choose`,
+  `cancel`, `undo`, `undo_batch`, `get`, `get_batch` (TypeScript `batchFromFile`, `undoBatch`, `getBatch`). Python
+  `ChangeReply`; TypeScript `ChangeReply`, `UpdateParams`, `BatchParams`, `BatchFileParams`, `ChainParams`.
+  `batch_from_file` uploads a CSV or `.xlsx` (2 MB at most) as multipart; the server takes no Idempotency-Key on that
+  route, so none is sent and it is not retried after a 5xx or a timeout. `undo_batch` reverses a batch by `batch_id`.
 - `update`, `batch`, `confirm`, `choose` and `cancel` take `previous_conversation_id` (TypeScript `previousConversationId`):
   the `conversation_id` of the earlier reply to continue from. If you need older context, pass the previous id; a previous
   id can itself have its own previous id, and the chain is followed as far back as it goes (the 10 minute hold and undo windows
@@ -18,15 +21,29 @@ in matih-labs/mitra.
 - `confirm(choice)` is the 1-based number of a listed choice; `choose(index)` is the 0-based `index` of a choice from
   `reply.choices`.
 - Every write call sends an `Idempotency-Key` (yours, or one per call); the server dedupes `update`, `batch`, `confirm`,
-  `choose`, `cancel` and `undo` on it, so a retry returns the original reply.
+  `choose`, `cancel`, `undo` and `undo_batch` on it, so a retry returns the original reply. The client's own retries (429,
+  5xx, a dropped connection, a timeout) keep the key. Only a reply the server kept is replayed: after a 5xx, `IN_PROGRESS`,
+  `NO_CREDITS` or `MEMBER_CAP` the same key runs again. The 422 for a key reused on another request is not guaranteed
+  between `update`/`batch` and the answer calls: never share a key.
+- A key whose first request is still running is held by the server for up to 60 s, then answered 409
+  `idempotency_key_in_progress` (`BusyError`): send the same call with the same key again. Change calls now allow a read
+  of at least 75 s (`request_timeout` / `timeoutMs` you pass is kept as given), so the 409 is seen rather than a timeout.
 - A change the server did not make (409 `HEAVY_CONFIRM`, 410 `ALREADY_UNDONE`, 404 `NO_MATCH`, ...) answers with a top-level
   `{code, message, ...}` body. Errors now read it as well as the `{detail: {...}}` envelope (one mapper, both SDKs):
   `MitraError` has the reply's `code` and `message`, plus `extra` (every other field), `pending_id` / `pendingId` and
-  `choices`. `ChangeReply` types every field of the reply.
+  `choices`. `ChangeReply` types every field of the reply (including `open_question` and `source`). 402 raises
+  `CreditsError` (`NO_CREDITS`, `MEMBER_CAP`), 403 `PermissionDeniedError` / `PermissionError` (`NOT_ALLOWED`, `WRITES_OFF`,
+  `READ_ONLY_SOURCE`, `KEY_SOURCE_NOT_ALLOWED`), 502 `MitraError` (`SOURCE_ERROR`, `SOURCE_UNREACHABLE`); a code the SDK
+  does not know is raised as it came.
+- A change reply has no `category`: `err.category` is `None` in Python and `undefined` in TypeScript, so branch on
+  `code`. TypeScript: `MitraError.category` and `MitraErrorInit.category` are now typed `string | undefined` (a type
+  change only; every other error still has a category).
 - A refused conversation id raises `MitraError` with `code` `conversation_not_found`, `conversation_expired`,
-  `conversation_other_source` or `conversation_too_long`; a reused idempotency key is a 422 with `category`
-  `idempotency_key_reused`. (`previous_conversation_id_required` is only answered to an MCP confirm, cancel or choose
+  `conversation_other_source` or `conversation_too_long`; a reused idempotency key is a 422 with `code` and `category`
+  both `idempotency_key_reused`; a request with neither `text` nor `item` is a 422 `invalid_request` (no `code`). (`previous_conversation_id_required` is only answered to an MCP confirm, cancel or choose
   without a `pending_id`: these clients always send one, so it does not reach them.)
+- A batch over 25 rows is held with 409 `HEAVY_CONFIRM`; repeat it with `confirm=True` (the documented path).
+- npm publishing of `@matihlabs/mitra` and `@matihlabs/embed` is stage-only: each release needs the maintainer's 2FA approval.
 
 ## 0.2.0 - 2026-11-02
 

@@ -7,7 +7,9 @@ Two shapes, and a client must read both:
 - A change reply is a top-level `{code, message, ...}` body, on every status (`REPLIES`: status and body).
   Its `code` is one of the server's own (NEEDS_CONFIRM, HEAVY_CONFIRM, WRITE_OK, ALREADY_UNDONE, ...).
 - A refusal made before anything ran is the FastAPI envelope `{"detail": {category, message, code?}}`
-  (`REFUSALS`). The conversation refusals carry a `code`; `idempotency_key_reused` is the `category`.
+  (`REFUSALS`). Every one carries a `code` beside its `category`; `idempotency_key_reused` has both, and the same
+  word for each (public_api/idempotency.py `reused`: `http_error(422, "idempotency_key_reused", msg, code="idempotency_key_reused")`).
+  A change reply has no `category`.
 
 The typed TypeScript mirror is sdks/typescript/test/change_bodies.ts: keep the two the same."""
 
@@ -94,6 +96,53 @@ CONVERSATION_TOO_LONG = _refusal(
     422, "invalid_request", "conversation_too_long",
     "That conversation has gone on for too many requests to continue from, so nothing was changed. "
     "Start a new one: leave previous_conversation_id out.")
-IDEMPOTENCY_KEY_REUSED = (422, {"detail": {
-    "category": "idempotency_key_reused",
-    "message": "This Idempotency-Key was already used with a different request; use a new key."}})
+IDEMPOTENCY_KEY_REUSED = _refusal(
+    422, "idempotency_key_reused", "idempotency_key_reused",
+    "This Idempotency-Key was already used with a different request; use a new key.")
+IDEMPOTENCY_KEY_IN_PROGRESS = _refusal(
+    409, "conflict", "idempotency_key_in_progress",
+    "A request with this Idempotency-Key is still being processed.")
+# `http_error(422, "invalid_request", "Send `text` or `item`.")` (v1/changes.py create_change): no `code` on this path
+INVALID_REQUEST = (422, {"detail": {"category": "invalid_request", "message": "Send `text` or `item`."}})
+
+# More change replies, one per status of writes/model.py HTTP_STATUS that has none above (messages: writes/billing.py,
+# writes/service.py NOT_ALLOWED_SAY and the refusals, writes/audit.py UNAVAILABLE, the `reach_refused` sentence)
+NO_CREDITS = (402, reply(
+    code="NO_CREDITS", credits=80, conversation_id=CONV_NEXT,
+    message="This needs 80 credits and you don't have enough. You have no Matih Credits left. Your data, "
+            "connections, files and past chats are still available; add credits to run new questions. "
+            "Nothing was changed."))
+MEMBER_CAP = (402, reply(
+    code="MEMBER_CAP", conversation_id=CONV_NEXT,
+    message="You've reached the monthly limit an admin of this workspace set for your usage. Ask an admin to "
+            "raise it, or wait until it resets at the start of next month (UTC). Nothing was changed."))
+NOT_ALLOWED = (403, reply(
+    code="NOT_ALLOWED", conversation_id=CONV_NEXT,
+    message="You can see here but not change. Who can change things is up to your owner."))
+WRITES_OFF = (403, reply(
+    code="WRITES_OFF", conversation_id=CONV_NEXT,
+    message="Changes are turned off here. An owner or admin can turn them on in Settings."))
+READ_ONLY_SOURCE = (403, reply(
+    code="READ_ONLY_SOURCE", conversation_id=CONV_NEXT,
+    message="I can answer questions about this one, but I can't change what's in it."))
+KEY_SOURCE_NOT_ALLOWED = (403, reply(
+    code="KEY_SOURCE_NOT_ALLOWED", conversation_id=CONV_NEXT,
+    message="This API key can't reach that source, so I can't change anything there. Use a key that can."))
+SOURCE_ERROR = (502, reply(
+    code="SOURCE_ERROR", conversation_id=CONV_NEXT,
+    message="I didn't save that: the change history is down on our side, and I don't change anything without it. "
+            "The team has been told."))
+SOURCE_UNREACHABLE = (502, reply(
+    code="SOURCE_UNREACHABLE", conversation_id=CONV_NEXT,
+    message="Orders DB is not taking the connection. Our team sees these connection failures and looks into "
+            "them. Your change was not saved."))
+# A code this SDK has never heard of: the server may add codes, and an old SDK must still raise with it
+SOMETHING_NEW = (409, reply(code="SOMETHING_NEW", message="A newer server says this.", conversation_id=CONV_NEXT))
+
+# Replies about a batch (POST /changes/batch/{id}/undo, GET /changes/batch/{id}): `_batch_shape`, `items` per change
+BATCH_UNDONE = (200, reply(
+    code="UNDONE", message="Put back: 2 changes.", batch_id="bat_1", affected=2, credits=0,
+    items=[{"index": 0, "code": "UNDONE", "message": "Done.", "change_id": "chg_2"},
+           {"index": 1, "code": "UNDONE", "message": "Done.", "change_id": "chg_3"}],
+    conversation_id=CONV))
+BATCH_NOT_FOUND = (404, {"detail": {"category": "not_found", "message": "That batch doesn't exist."}})
